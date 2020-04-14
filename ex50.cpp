@@ -106,7 +106,7 @@ PetscErrorCode ComputeRHS(KSP ksp,Vec b,void *ctx)
   PetscFunctionReturn(0);
 }
 
-PetscErrorCode ComputeJacobian(KSP ksp,Mat J, Mat jac,void *ctx)
+PetscErrorCode ComputeJacobian(KSP ksp,Mat J, Mat jac,void*)
 {
   PetscErrorCode ierr;
   PetscInt       i, j, M, N, xm, ym, xs, ys, num, numi, numj;
