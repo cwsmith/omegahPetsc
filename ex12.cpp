@@ -540,9 +540,9 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     auto world = lib.world();
     auto mesh = Omega_h::build_box(world, OMEGA_H_SIMPLEX, 1., 1., 0, 2, 2, 0);
 
-    const int dim = 2;
-    const int numCells = 8;
-    const int numVertices = 9;
+    const int dim = mesh.dim();
+    const int numCells = mesh.nelems();
+    const int numVertices = mesh.nverts();
     const int numCorners = 3;
     // const auto vertexCoords = mesh.coords();
     // const auto cell = mesh.ask_verts_of(2);
