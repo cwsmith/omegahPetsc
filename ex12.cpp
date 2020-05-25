@@ -24,6 +24,10 @@ Information on refinement:
 #include <Omega_h_mesh.hpp>
 #include <Omega_h_comm.hpp>
 #include <Omega_h_build.hpp>
+#include <algorithm>
+#include <vector>
+#include <set>
+#include <iostream>
 
 
 typedef enum {NEUMANN, DIRICHLET, NONE} BCType;
@@ -60,13 +64,13 @@ typedef struct {
   PetscBool      checkksp;          /* Whether to check the KSPSolve for runType == RUN_TEST */
 } AppCtx;
 
-static PetscErrorCode zero(PetscInt, PetscReal, const PetscReal*, PetscInt, PetscScalar *u, void*)
+static PetscErrorCode zero(PetscInt dim, PetscReal time, const PetscReal x[], PetscInt Nc, PetscScalar *u, void *ctx)
 {
   u[0] = 0.0;
   return 0;
 }
 
-static PetscErrorCode ecks(PetscInt, PetscReal, const PetscReal x[], PetscInt, PetscScalar *u, void*)
+static PetscErrorCode ecks(PetscInt dim, PetscReal time, const PetscReal x[], PetscInt Nc, PetscScalar *u, void *ctx)
 {
   u[0] = x[0];
   return 0;
@@ -97,21 +101,21 @@ static PetscErrorCode ecks(PetscInt, PetscReal, const PetscReal x[], PetscInt, P
 
     \int^1_0 x^2 dx + \int^1_0 (1 + y^2) dy + \int^1_0 (x^2 + 1) dx + \int^1_0 y^2 dy = 1/3 + 4/3 + 4/3 + 1/3 = 3 1/3
 */
-static PetscErrorCode quadratic_u_2d(PetscInt, PetscReal, const PetscReal x[], PetscInt, PetscScalar *u, void *)
+static PetscErrorCode quadratic_u_2d(PetscInt dim, PetscReal time, const PetscReal x[], PetscInt Nc, PetscScalar *u, void *ctx)
 {
   *u = x[0]*x[0] + x[1]*x[1];
   return 0;
 }
 
-static void quadratic_u_field_2d(PetscInt, PetscInt, PetscInt,
-                                 const PetscInt [], const PetscInt [], const PetscScalar [], const PetscScalar [], const PetscScalar [],
-                                 const PetscInt [], const PetscInt [], const PetscScalar a[], const PetscScalar [], const PetscScalar [],
-                                 PetscReal, const PetscReal [], PetscInt , const PetscScalar [], PetscScalar uexact[])
+static void quadratic_u_field_2d(PetscInt dim, PetscInt Nf, PetscInt NfAux,
+                                 const PetscInt uOff[], const PetscInt uOff_x[], const PetscScalar u[], const PetscScalar u_t[], const PetscScalar u_x[],
+                                 const PetscInt aOff[], const PetscInt aOff_x[], const PetscScalar a[], const PetscScalar a_t[], const PetscScalar a_x[],
+                                 PetscReal t, const PetscReal x[], PetscInt numConstants, const PetscScalar constants[], PetscScalar uexact[])
 {
   uexact[0] = a[0];
 }
 
-static PetscErrorCode circle_u_2d(PetscInt, PetscReal, const PetscReal x[], PetscInt, PetscScalar *u, void *)
+static PetscErrorCode circle_u_2d(PetscInt dim, PetscReal time, const PetscReal x[], PetscInt Nc, PetscScalar *u, void *ctx)
 {
   const PetscReal alpha   = 500.;
   const PetscReal radius2 = PetscSqr(0.15);
@@ -122,7 +126,7 @@ static PetscErrorCode circle_u_2d(PetscInt, PetscReal, const PetscReal x[], Pets
   return 0;
 }
 
-static PetscErrorCode cross_u_2d(PetscInt, PetscReal, const PetscReal x[], PetscInt, PetscScalar *u, void *)
+static PetscErrorCode cross_u_2d(PetscInt dim, PetscReal time, const PetscReal x[], PetscInt Nc, PetscScalar *u, void *ctx)
 {
   const PetscReal alpha = 50*4;
   const PetscReal xy    = (x[0]-0.5)*(x[1]-0.5);
@@ -131,10 +135,10 @@ static PetscErrorCode cross_u_2d(PetscInt, PetscReal, const PetscReal x[], Petsc
   return 0;
 }
 
-static void f0_u(PetscInt, PetscInt, PetscInt,
-                 const PetscInt [], const PetscInt [], const PetscScalar [], const PetscScalar [], const PetscScalar [],
-                 const PetscInt [], const PetscInt [], const PetscScalar [], const PetscScalar [], const PetscScalar [],
-                 PetscReal , const PetscReal [], PetscInt , const PetscScalar [], PetscScalar f0[])
+static void f0_u(PetscInt dim, PetscInt Nf, PetscInt NfAux,
+                 const PetscInt uOff[], const PetscInt uOff_x[], const PetscScalar u[], const PetscScalar u_t[], const PetscScalar u_x[],
+                 const PetscInt aOff[], const PetscInt aOff_x[], const PetscScalar a[], const PetscScalar a_t[], const PetscScalar a_x[],
+                 PetscReal t, const PetscReal x[], PetscInt numConstants, const PetscScalar constants[], PetscScalar f0[])
 {
   f0[0] = 4.0;
 }
@@ -513,114 +517,105 @@ static PetscErrorCode CreateBCLabel(DM dm, const char name[])
 static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
 {
 
-    //6-----7-----8
-    //|\  5 |\  7 |
-    //| \   | \   |
-    //| 4 \ | 6 \ |
-    //3-----4-----5
-    //|\  1 |\  3 |
-    //| \   | \   |
-    //| 0 \ | 2 \ |
-    //0-----1-----2
+  //  10---27---12----28---13
+  //   |       / |       / |
+  //   | 4    /  |  5   /  |
+  //  22    21  26    25   29
+  //   |   /  1  |   /   3 |
+  //   |  /      |  /      |
+  //   9---20---11----24---14
+  //   |       / |        /|
+  //   | 2   /   | 6    /  |
+  //  19   18   23    31   32
+  //   |  /   0  |   /   7 |
+  //   | /       |  /      |
+  //   8---17---15----30---16
 
-    //     29    32
-    //   -------------
-    //   |\    |\    |
-    //27 | \26 |28\30|31
-    //   |   \ |   \ |
-    //   |--21-|--25-|
-    //   |\    |\    |
-    //19 | \18 |20\23| 24
-    //   |   \ |   \ |
-    //   -------------
-    //     17     22
-    PetscErrorCode ierr;
+  PetscErrorCode ierr;
 
-    auto lib = Omega_h::Library();
-    auto world = lib.world();
-    auto mesh = Omega_h::build_box(world, OMEGA_H_SIMPLEX, 1., 1., 0, 2, 2, 0);
+  auto lib = Omega_h::Library();
+  auto world = lib.world();
+  auto mesh = Omega_h::build_box(world, OMEGA_H_SIMPLEX, 1., 1., 0, 2, 2, 0);
 
-    const int dim = mesh.dim();
-    const int numCells = mesh.nelems();
-    const int numVertices = mesh.nverts();
-    const int numCorners = 3;
-    // const auto vertexCoords = mesh.coords();
-    // const auto cell = mesh.ask_verts_of(2);
+  const int dim = mesh.dim();
+  const int numCells = mesh.nelems();
+  const int numVertices = mesh.nverts();
+  const int numCorners = 3;
 
-    const int         cell[24]  = {0,1,3, 1,4,3, 1,2,4, 2,5,4, 3,4,6, 4,7,6, 4,5,7, 5,8,7};
-    const double      vertexCoords[18] = {0,0, 0.5,0, 1,0, 0,0.5, 0.5,0.5, 1,0.5, 0,1, 0.5,1, 1,1};
+  // Get the coordinates of vertices
+  Omega_h::HostRead<Omega_h::Real> vertexCoords(mesh.coords());
+  assert(vertexCoords.size() == dim*numVertices);
 
-    // int *cell;
-    // double *vertexCoords;
+  // Get the vertices of each cell
+  Omega_h::HostRead<Omega_h::LO> cell(mesh.ask_elem_verts());
+  assert(cell.size() == numCorners*numCells);
+  
+  ierr = DMPlexCreateFromCellList(comm, dim, numCells, numVertices, numCorners, options->interpolate, cell.data(), dim, vertexCoords.data(), dm);CHKERRQ(ierr);
 
-    PetscFunctionBegin;
-    // ierr = PetscMalloc1(numCells*numCorners,&cell);CHKERRQ(ierr);
-    // ierr = PetscMalloc1(numVertices*dim,&vertexCoords);CHKERRQ(ierr);
+  // PetscInt cStart, cEnd, vStart, vEnd, eStart, eEnd;
+  // ierr = DMPlexGetHeightStratum(*dm, 0, &cStart, &cEnd); /* cells */ 
+  // ierr = DMPlexGetHeightStratum(*dm, 1, &eStart, &eEnd); /* edges */ 
+  // ierr = DMPlexGetHeightStratum(*dm, 2, &vStart, &vEnd); /* vertices */
 
-    // int numCells_x = 2;
-    // int numCells_y = 2;
-    // int v1 = 0;
-    // int v2 = 1;
-    // int v3 = 1+numCells_x; 
-    // int v4 = 2+numCells_x;
-    // int cell_num = 1;
-    // for (int i = 0; i < numCells*numCorners-3; i+=4)
-    // {
-    //     cell[i] = v1;
-    //     cell[i+1] = v2;
-    //     cell[i+2] = v3;
-    //     cell[i+3] = v4;
-    //     if (cell_num == numCells_x)
-    //     {
-    //         v1+=2; v2+=2; v3+=2; v4+=2;
-    //         cell_num =1;
-    //     }
-    //     else
-    //     {
-    //         v1++; v2++; v3++; v4++;
-    //         cell_num++;
-    //     }
-    // }
+  // printf("Cells: %d %d \n", cStart, cEnd-1);
+  // printf("Vertices: %d %d \n", vStart, vEnd-1);
+  // printf("Edges: %d %d \n", eStart, eEnd-1);
 
-    // int x = 0;
-    // int y = 0;
-    // cell_num = 0;
-    // for (int i = 0; i < numVertices*dim-1; i+=2)
-    // {
-    //     vertexCoords[i] = x;
-    //     vertexCoords[i+1] = y;
-    //     if (cell_num == numCells_x)
-    //     {
-    //         x = 0; y--;
-    //         cell_num =1;
-    //     }
-    //     else
-    //     {
-    //         x++;
-    //         cell_num++;
-    //     }
-    // }    
-    
-    ierr = DMPlexCreateFromCellList(comm, dim, numCells, numVertices, numCorners, options->interpolate, cell, dim, vertexCoords, dm);CHKERRQ(ierr);
-
-    // PetscInt pStart, pEnd, cStart, cEnd, vStart, vEnd, v, eStart, eEnd;
-    // ierr = DMPlexGetHeightStratum(*dm, 0, &cStart, &cEnd); /* cells */ 
-    // ierr = DMPlexGetHeightStratum(*dm, 1, &eStart, &eEnd); /* edges */ 
-    // ierr = DMPlexGetHeightStratum(*dm, 2, &vStart, &vEnd); /* vertices */
-
-    // printf("Cells: %d %d \n", cStart, cEnd-1);
-    // printf("Vertices: %d %d \n", vStart, vEnd-1);
-    // printf("Edges: %d %d \n", eStart, eEnd-1);
-
-    const int markerPoints[16] = {8, 9, 10, 12, 13, 14, 15, 16, 17, 19, 22, 24, 27, 29, 31, 32};
-    for (int i = 0; i < 16; i++)
+  // Get the edges for each face
+  Omega_h::Read<Omega_h::LO> face2edges(mesh.get_adj(2, 1).ab2b);
+  assert(face2edges.size() == 3*numCells);
+  std::vector<int> boundary_edge;
+  // If the edge appeared twice, then it is shared by two faces and therefore not a boundary edge
+  for (int i = 0; i < face2edges.size(); i++)
+  {
+    bool duplicate = false;
+    for (int j = 0; j < face2edges.size(); j++)
     {
-      ierr = DMSetLabelValue(*dm, "marker", markerPoints[i], 1);CHKERRQ(ierr);
+      if (i != j && face2edges.get(i) == face2edges.get(j))
+      {
+        duplicate = true;
+        break;
+      }
     }
+    if (duplicate == false)
+    {
+      boundary_edge.push_back(face2edges.get(i));
+    }
+  }
 
-    // ierr = PetscFree(cell);CHKERRQ(ierr);
-    // ierr = PetscFree(vertexCoords);CHKERRQ(ierr);
-    PetscFunctionReturn(0);
+  // Get the vertices for each edge
+  Omega_h::Read<Omega_h::LO> edge2verts = mesh.get_adj(1, 0).ab2b;
+  assert(edge2verts.size() == 2*mesh.nedges());
+  // By using a set, the vertices for all the boundary edges would not repeat
+  // Can be replaced with an unordered_set
+  std::set<int> boundary_vert;
+  for (unsigned int i = 0; i < boundary_edge.size(); i++)
+  {
+    // Insert the two vertices for each edge
+    boundary_vert.insert(edge2verts.get(2*boundary_edge[i]));
+    boundary_vert.insert(edge2verts.get(2*boundary_edge[i]+1));
+  }
+
+  // markerpoints contain the boundary vertices and edges in sequential indexing
+  // Initialize markerpoints with boundary_vert
+  std::vector<int> markerpoints(boundary_vert.begin(), boundary_vert.end());
+  // Make the index of vertices start after number of cells with a lambda function
+  for_each(markerpoints.begin(), markerpoints.end(), [&numCells](int &n){ n+=numCells; });
+
+  // Add boundary_edge with its index starting after number of cells and number of vertices
+  if (options->interpolate == PETSC_TRUE) {
+    for (unsigned int i = 0; i < boundary_edge.size(); i++)
+    {
+      markerpoints.push_back(boundary_edge[i]+numCells+numVertices);
+    }
+  }
+  
+  for (int i = 0; i < markerpoints.size(); i++)
+  {
+    ierr = DMSetLabelValue(*dm, "marker", markerpoints[i], 1);CHKERRQ(ierr);
+  }
+  
+  PetscFunctionReturn(0);
 }
 
 static PetscErrorCode CreateMesh(MPI_Comm comm, AppCtx *user, DM *dm)
