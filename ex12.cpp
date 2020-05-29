@@ -516,23 +516,38 @@ static PetscErrorCode CreateBCLabel(DM dm, const char name[])
 
 static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
 {
+  /* 
+  Omega_h mesh representation
+   10---27---12----28---13
+    |       / |       / |
+    | 4    /  |  5   /  |
+   22    21  26    25   29
+    |   /  1  |   /   3 |
+    |  /      |  /      |
+    9---20---11----24---14
+    |       / |        /|
+    | 2   /   | 6    /  |
+   19   18   23    31   32
+    |  /   0  |   /   7 |
+    | /       |  /      |
+    8---17---15----30---16 
 
-  //  10---27---12----28---13
-  //   |       / |       / |
-  //   | 4    /  |  5   /  |
-  //  22    21  26    25   29
-  //   |   /  1  |   /   3 |
-  //   |  /      |  /      |
-  //   9---20---11----24---14
-  //   |       / |        /|
-  //   | 2   /   | 6    /  |
-  //  19   18   23    31   32
-  //   |  /   0  |   /   7 |
-  //   | /       |  /      |
-  //   8---17---15----30---16
-
-  PetscErrorCode ierr;
-
+  PETSc mesh representation
+   10---27---12----29---13
+    |       / |       / |
+    | 4    /  |  5   /  |
+   28    22  21    26   25
+    |   /  1  |   /   3 |
+    |  /      |  /      |
+    9---20---11----24---14
+    |       / |        /|
+    | 2   /   | 6    /  |
+   23   19   18    30   32
+    |  /   0  |   /   7 |
+    | /       |  /      |
+    8---17---15----31---16
+  */
+ 
   auto lib = Omega_h::Library();
   auto world = lib.world();
   auto mesh = Omega_h::build_box(world, OMEGA_H_SIMPLEX, 1., 1., 0, 2, 2, 0);
@@ -550,69 +565,98 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   Omega_h::HostRead<Omega_h::LO> cell(mesh.ask_elem_verts());
   assert(cell.size() == numCorners*numCells);
   
-  ierr = DMPlexCreateFromCellList(comm, dim, numCells, numVertices, numCorners, options->interpolate, cell.data(), dim, vertexCoords.data(), dm);CHKERRQ(ierr);
+  PetscErrorCode ierr;
+  ierr = DMPlexCreateFromCellList(comm, dim, numCells, numVertices, numCorners, PETSC_TRUE, cell.data(), dim, vertexCoords.data(), dm);CHKERRQ(ierr);
 
-  // PetscInt cStart, cEnd, vStart, vEnd, eStart, eEnd;
-  // ierr = DMPlexGetHeightStratum(*dm, 0, &cStart, &cEnd); /* cells */ 
-  // ierr = DMPlexGetHeightStratum(*dm, 1, &eStart, &eEnd); /* edges */ 
-  // ierr = DMPlexGetHeightStratum(*dm, 2, &vStart, &vEnd); /* vertices */
+  // Get the starting and ending index for the topology
+  PetscInt cStart, cEnd, vStart, vEnd, eStart, eEnd;
+  ierr = DMPlexGetHeightStratum(*dm, 0, &cStart, &cEnd); /* cells */ 
+  ierr = DMPlexGetHeightStratum(*dm, 1, &eStart, &eEnd); /* edges */ 
+  ierr = DMPlexGetHeightStratum(*dm, 2, &vStart, &vEnd); /* vertices */
 
-  // printf("Cells: %d %d \n", cStart, cEnd-1);
-  // printf("Vertices: %d %d \n", vStart, vEnd-1);
-  // printf("Edges: %d %d \n", eStart, eEnd-1);
+  // Get the number of edges for a cell assuming constant cell shape 
+  int numEdges;
+  ierr = DMPlexGetConeSize(*dm, 0, &numEdges);CHKERRQ(ierr);
 
-  // Get the edges for each face
-  Omega_h::Read<Omega_h::LO> face2edges(mesh.get_adj(2, 1).ab2b);
-  assert(face2edges.size() == 3*numCells);
+  /* 
+  Iterate through all the edges for all of the cells and then check if each edge exist in two 
+  different cells.  
+  If the edge appeared twice, then it is shared by two cells and therefore not a boundary edge. 
+  */
   std::vector<int> boundary_edge;
-  // If the edge appeared twice, then it is shared by two faces and therefore not a boundary edge
-  for (int i = 0; i < face2edges.size(); i++)
+  for (int cell_i = cStart; cell_i < cEnd; cell_i++)
   {
-    bool duplicate = false;
-    for (int j = 0; j < face2edges.size(); j++)
+    // Get the edges for one cell
+    const int *edges1;
+    ierr = DMPlexGetCone(*dm, cell_i, &edges1);CHKERRQ(ierr);
+
+    // Iterate through these edges
+    for (int i = 0; i < numEdges; i++)
     {
-      if (i != j && face2edges.get(i) == face2edges.get(j))
+      // Flag indicating whether the edge has appeared twice
+      bool duplicate = false;
+      for (int cell_j = cStart; cell_j < cEnd; cell_j++)
       {
-        duplicate = true;
-        break;
+        // Get the edges for another cell
+        if (cell_i != cell_j && duplicate == false)
+        {
+          const int *edges2;
+          ierr = DMPlexGetCone(*dm, cell_j, &edges2);CHKERRQ(ierr);
+          
+          for (int j = 0; j < numEdges; j++)
+          {
+            // Check if the same edge exist in two different cells
+            if (edges1[i] == edges2[j])
+            {
+              duplicate = true;
+              break;
+            } 
+          }
+        }
       }
-    }
-    if (duplicate == false)
-    {
-      boundary_edge.push_back(face2edges.get(i));
+
+      if (duplicate == false)
+      {
+        boundary_edge.push_back(edges1[i]);
+      }
+      
     }
   }
-
-  // Get the vertices for each edge
-  Omega_h::Read<Omega_h::LO> edge2verts = mesh.get_adj(1, 0).ab2b;
-  assert(edge2verts.size() == 2*mesh.nedges());
+  
   // By using a set, the vertices for all the boundary edges would not repeat
   // Can be replaced with an unordered_set
   std::set<int> boundary_vert;
   for (unsigned int i = 0; i < boundary_edge.size(); i++)
   {
-    // Insert the two vertices for each edge
-    boundary_vert.insert(edge2verts.get(2*boundary_edge[i]));
-    boundary_vert.insert(edge2verts.get(2*boundary_edge[i]+1));
+    // Get the two vertices for a boundary edge
+    const int *verts;
+    ierr = DMPlexGetCone(*dm, boundary_edge[i], &verts);CHKERRQ(ierr);
+
+    boundary_vert.insert(verts[0]);
+    boundary_vert.insert(verts[1]);
   }
 
-  // markerpoints contain the boundary vertices and edges in sequential indexing
-  // Initialize markerpoints with boundary_vert
-  std::vector<int> markerpoints(boundary_vert.begin(), boundary_vert.end());
-  // Make the index of vertices start after number of cells with a lambda function
-  for_each(markerpoints.begin(), markerpoints.end(), [&numCells](int &n){ n+=numCells; });
+  // Output an uninterpolated mesh if needed
+  if (options->interpolate == PETSC_FALSE)
+  {
+    DM dm_unint;
+    ierr = DMPlexUninterpolate(*dm, &dm_unint);CHKERRQ(ierr);
+    ierr = DMPlexCopyCoordinates(*dm, dm_unint);CHKERRQ(ierr);
+    ierr = DMDestroy(dm);CHKERRQ(ierr);
+    *dm = dm_unint;
+  }
 
-  // Add boundary_edge with its index starting after number of cells and number of vertices
-  if (options->interpolate == PETSC_TRUE) {
+  // Mark the boundary vertices and edges in DMPlex
+  for (auto i = boundary_vert.begin(); i != boundary_vert.end(); i++)
+  {
+    ierr = DMSetLabelValue(*dm, "marker", *i, 1);CHKERRQ(ierr);
+  }
+  if (options->interpolate == PETSC_TRUE) 
+  {
     for (unsigned int i = 0; i < boundary_edge.size(); i++)
     {
-      markerpoints.push_back(boundary_edge[i]+numCells+numVertices);
+      ierr = DMSetLabelValue(*dm, "marker", boundary_edge[i], 1);CHKERRQ(ierr);
     }
-  }
-  
-  for (int i = 0; i < markerpoints.size(); i++)
-  {
-    ierr = DMSetLabelValue(*dm, "marker", markerpoints[i], 1);CHKERRQ(ierr);
   }
   
   PetscFunctionReturn(0);
