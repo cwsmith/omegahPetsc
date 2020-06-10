@@ -574,53 +574,21 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   ierr = DMPlexGetHeightStratum(*dm, 1, &eStart, &eEnd); /* edges */ 
   ierr = DMPlexGetHeightStratum(*dm, 2, &vStart, &vEnd); /* vertices */
 
-  // Get the number of edges for a cell assuming constant cell shape 
-  int numEdges;
-  ierr = DMPlexGetConeSize(*dm, 0, &numEdges);CHKERRQ(ierr);
-
   /* 
-  Iterate through all the edges for all of the cells and then check if each edge exist in two 
-  different cells.  
-  If the edge appeared twice, then it is shared by two cells and therefore not a boundary edge. 
+  Iterate through all the edges and then check if each edge is shared by two different cells by 
+  using DMPlexGetSupportSize. It is a boundary edge if the edge exist in only one cell. 
   */
   std::vector<int> boundary_edge;
-  for (int cell_i = cStart; cell_i < cEnd; cell_i++)
+  for (int i = eStart; i < eEnd; i++)
   {
-    // Get the edges for one cell
-    const int *edges1;
-    ierr = DMPlexGetCone(*dm, cell_i, &edges1);CHKERRQ(ierr);
+    int support_size;
+    ierr = DMPlexGetSupportSize(*dm, i, &support_size);CHKERRQ(ierr);
 
-    // Iterate through these edges
-    for (int i = 0; i < numEdges; i++)
+    if (support_size == 1)
     {
-      // Flag indicating whether the edge has appeared twice
-      bool duplicate = false;
-      for (int cell_j = cStart; cell_j < cEnd; cell_j++)
-      {
-        // Get the edges for another cell
-        if (cell_i != cell_j && duplicate == false)
-        {
-          const int *edges2;
-          ierr = DMPlexGetCone(*dm, cell_j, &edges2);CHKERRQ(ierr);
-          
-          for (int j = 0; j < numEdges; j++)
-          {
-            // Check if the same edge exist in two different cells
-            if (edges1[i] == edges2[j])
-            {
-              duplicate = true;
-              break;
-            } 
-          }
-        }
-      }
-
-      if (duplicate == false)
-      {
-        boundary_edge.push_back(edges1[i]);
-      }
-      
+      boundary_edge.push_back(i);
     }
+    
   }
   
   // By using a set, the vertices for all the boundary edges would not repeat
