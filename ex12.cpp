@@ -553,7 +553,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   // auto mesh = Omega_h::build_box(world, OMEGA_H_SIMPLEX, 1., 1., 0, 2, 2, 0);
   auto mesh = Omega_h::Mesh(&lib);
   Omega_h::binary::read("24k.osh", lib.world(), &mesh, false);
-  mesh.balance();
+  // mesh.balance();
 
   const int dim = mesh.dim();
   const int numCells = mesh.nelems();
