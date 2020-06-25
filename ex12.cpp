@@ -555,14 +555,22 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
 
   auto lib = Omega_h::Library();
   auto mesh = Omega_h::Mesh(&lib);
+  auto omega_comm = Omega_h::CommPtr(new Omega_h::Comm(&lib, comm));
+
+  // Use box mesh
   if (strcmp(options->mesh_type, "box") == 0)
   {
-    mesh = Omega_h::build_box(lib.world(), OMEGA_H_SIMPLEX, 1., 1., 0, 2, 2, 0);
+    mesh = Omega_h::build_box(omega_comm, OMEGA_H_SIMPLEX, 1., 1., 0, 2, 2, 0);
   }
+  // Use xgc mesh
   else if (strcmp(options->mesh_type, "xgc") == 0)
   {
-    Omega_h::binary::read("24k.osh", lib.world(), &mesh, false);
+    Omega_h::binary::read("24k.osh", omega_comm, &mesh, false);
     mesh.balance();
+  }
+  else
+  {
+    std::cerr << "Select box or xgc for -mesh\n";
   }
 
   const int dim = mesh.dim();
@@ -1088,6 +1096,17 @@ int main(int argc, char **argv)
   PetscBool      isFAS;
   PetscErrorCode ierr;
 
+  MPI_Comm dup_comm;
+  int rank, rank1;
+  int size, size1;
+  MPI_Init(&argc, &argv);
+  MPI_Comm_rank(MPI_COMM_WORLD,&rank);
+  MPI_Comm_size(MPI_COMM_WORLD,&size);
+  MPI_Comm_split(MPI_COMM_WORLD, rank%2, rank, &dup_comm);
+  MPI_Comm_rank(dup_comm,&rank1);
+  MPI_Comm_size(dup_comm,&size1);
+  PETSC_COMM_WORLD=dup_comm;
+
   ierr = PetscInitialize(&argc, &argv, NULL,help);if (ierr) return ierr;
   ierr = ProcessOptions(PETSC_COMM_WORLD, &user);CHKERRQ(ierr);
   ierr = SNESCreate(PETSC_COMM_WORLD, &snes);CHKERRQ(ierr);
@@ -1296,6 +1315,7 @@ int main(int argc, char **argv)
   ierr = SNESDestroy(&snes);CHKERRQ(ierr);
   ierr = DMDestroy(&dm);CHKERRQ(ierr);
   ierr = PetscFree2(user.exactFuncs, user.exactFields);CHKERRQ(ierr);
+  MPI_Comm_free(&dup_comm);
   ierr = PetscFinalize();
   return ierr;
 }
