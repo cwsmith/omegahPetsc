@@ -62,6 +62,8 @@ typedef struct {
   /* Solver */
   PC             pcmg;              /* This is needed for error monitoring */
   PetscBool      checkksp;          /* Whether to check the KSPSolve for runType == RUN_TEST */
+
+  char           mesh_type[4] = "box";
 } AppCtx;
 
 static PetscErrorCode zero(PetscInt dim, PetscReal time, const PetscReal x[], PetscInt Nc, PetscScalar *u, void *ctx)
@@ -496,6 +498,7 @@ static PetscErrorCode ProcessOptions(MPI_Comm comm, AppCtx *options)
   if (options->runType == RUN_TEST) {
     ierr = PetscOptionsBool("-run_test_check_ksp", "Check solution of KSP", "ex12.c", options->checkksp, &options->checkksp, NULL);CHKERRQ(ierr);
   }
+  ierr = PetscOptionsString("-mesh", "Use box or xgc mesh", "ex12.c", options->mesh_type, options->mesh_type, sizeof(options->mesh_type), &flg);CHKERRQ(ierr);
   ierr = PetscOptionsEnd();
   ierr = PetscLogEventRegister("CreateMesh", DM_CLASSID, &options->createMeshEvent);CHKERRQ(ierr);
   PetscFunctionReturn(0);
@@ -547,13 +550,20 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     | /       |  /      |
     8---17---15----31---16
   */
- 
+
+  assert(options->dim == 2);
+
   auto lib = Omega_h::Library();
-  // auto world = lib.world();
-  // auto mesh = Omega_h::build_box(world, OMEGA_H_SIMPLEX, 1., 1., 0, 2, 2, 0);
   auto mesh = Omega_h::Mesh(&lib);
-  Omega_h::binary::read("24k.osh", lib.world(), &mesh, false);
-  // mesh.balance();
+  if (strcmp(options->mesh_type, "box") == 0)
+  {
+    mesh = Omega_h::build_box(lib.world(), OMEGA_H_SIMPLEX, 1., 1., 0, 2, 2, 0);
+  }
+  else if (strcmp(options->mesh_type, "xgc") == 0)
+  {
+    Omega_h::binary::read("24k.osh", lib.world(), &mesh, false);
+    mesh.balance();
+  }
 
   const int dim = mesh.dim();
   const int numCells = mesh.nelems();
@@ -674,13 +684,13 @@ static PetscErrorCode CreateMesh(MPI_Comm comm, AppCtx *user, DM *dm)
       }
     }
     /* Distribute mesh over processes */
-    ierr = DMPlexGetPartitioner(*dm,&part);CHKERRQ(ierr);
-    ierr = PetscPartitionerSetFromOptions(part);CHKERRQ(ierr);
-    ierr = DMPlexDistribute(*dm, 0, NULL, &distributedMesh);CHKERRQ(ierr);
-    if (distributedMesh) {
-      ierr = DMDestroy(dm);CHKERRQ(ierr);
-      *dm  = distributedMesh;
-    }
+    // ierr = DMPlexGetPartitioner(*dm,&part);CHKERRQ(ierr);
+    // ierr = PetscPartitionerSetFromOptions(part);CHKERRQ(ierr);
+    // ierr = DMPlexDistribute(*dm, 0, NULL, &distributedMesh);CHKERRQ(ierr);
+    // if (distributedMesh) {
+    //   ierr = DMDestroy(dm);CHKERRQ(ierr);
+    //   *dm  = distributedMesh;
+    // }
   }
   if (interpolate) {
     if (user->bcType == NEUMANN) {
