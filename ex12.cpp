@@ -1315,7 +1315,7 @@ int main(int argc, char **argv)
   ierr = SNESDestroy(&snes);CHKERRQ(ierr);
   ierr = DMDestroy(&dm);CHKERRQ(ierr);
   ierr = PetscFree2(user.exactFuncs, user.exactFields);CHKERRQ(ierr);
-  MPI_Comm_free(&dup_comm);
+  PETSC_COMM_WORLD=MPI_COMM_WORLD;
   ierr = PetscFinalize();
   return ierr;
 }
