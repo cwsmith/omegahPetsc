@@ -571,12 +571,17 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   else
   {
     std::cerr << "Select box or xgc for -mesh\n";
+    exit (EXIT_FAILURE);
   }
 
   const int dim = mesh.dim();
   const int numCells = mesh.nelems();
   const int numVertices = mesh.nverts();
   const int numCorners = 3;
+
+  int rank;
+  MPI_Comm_rank(comm, &rank);
+  std::cerr << rank << " numCells: " << numCells << " numVertices: " << numVertices << "\n";
 
   // Get the coordinates of vertices
   Omega_h::HostRead<Omega_h::Real> vertexCoords(mesh.coords());
@@ -1102,12 +1107,19 @@ int main(int argc, char **argv)
   MPI_Init(&argc, &argv);
   MPI_Comm_rank(MPI_COMM_WORLD,&rank);
   MPI_Comm_size(MPI_COMM_WORLD,&size);
+  std::cerr << "Rank: " << rank << ", Size: " << size << "\n";
   MPI_Comm_split(MPI_COMM_WORLD, rank%2, rank, &dup_comm);
   MPI_Comm_rank(dup_comm,&rank1);
   MPI_Comm_size(dup_comm,&size1);
+  std::cerr << "Split Rank: " << rank1 << ", Split Size: " << size1 << "\n";
   PETSC_COMM_WORLD=dup_comm;
 
   ierr = PetscInitialize(&argc, &argv, NULL,help);if (ierr) return ierr;
+
+  PetscLogStage stagenum0;
+  PetscLogStageRegister("Mesh creation", &stagenum0);
+  PetscLogStagePush(stagenum0);
+
   ierr = ProcessOptions(PETSC_COMM_WORLD, &user);CHKERRQ(ierr);
   ierr = SNESCreate(PETSC_COMM_WORLD, &snes);CHKERRQ(ierr);
   ierr = CreateMesh(PETSC_COMM_WORLD, &user, &dm);CHKERRQ(ierr);
@@ -1116,6 +1128,8 @@ int main(int argc, char **argv)
 
   ierr = PetscMalloc2(1, &user.exactFuncs, 1, &user.exactFields);CHKERRQ(ierr);
   ierr = SetupDiscretization(dm, &user);CHKERRQ(ierr);
+
+  PetscLogStagePop();
 
   ierr = DMCreateGlobalVector(dm, &u);CHKERRQ(ierr);
   ierr = PetscObjectSetName((PetscObject) u, "potential");CHKERRQ(ierr);
