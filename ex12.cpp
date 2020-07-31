@@ -28,6 +28,7 @@ Information on refinement:
 #include <vector>
 #include <set>
 #include <iostream>
+#include <Omega_h_filesystem.hpp>
 
 
 typedef enum {NEUMANN, DIRICHLET, NONE} BCType;
@@ -553,33 +554,97 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
 
   assert(options->dim == 2);
 
+  PetscErrorCode ierr;
   auto lib = Omega_h::Library();
   auto mesh = Omega_h::Mesh(&lib);
+  // auto omega_comm = Omega_h::CommPtr(new Omega_h::Comm(&lib, comm));
+
+  int rank;
+  MPI_Comm_rank(comm, &rank);
+
+  int dim;
+  int numCells;
+  int numVertices;
+  int numCorners = 3;
+
+  // Use box mesh
   if (strcmp(options->mesh_type, "box") == 0)
   {
     mesh = Omega_h::build_box(lib.world(), OMEGA_H_SIMPLEX, 1., 1., 0, 2, 2, 0);
+
+    dim = mesh.dim();
+    numCells = mesh.nelems();
+    numVertices = mesh.nverts();
+
+    // Get the coordinates of vertices
+    Omega_h::HostRead<Omega_h::Real> vertexCoords(mesh.coords());
+    assert(vertexCoords.size() == dim*numVertices);
+
+    // Get the vertices of each cell
+    Omega_h::HostRead<Omega_h::LO> cell(mesh.ask_elem_verts());
+    assert(cell.size() == numCorners*numCells);
+    
+    ierr = DMPlexCreateFromCellList(comm, dim, numCells, numVertices, numCorners, PETSC_TRUE, cell.data(), dim, vertexCoords.data(), dm);CHKERRQ(ierr);
   }
   else if (strcmp(options->mesh_type, "xgc") == 0)
   {
-    Omega_h::binary::read("24k.osh", lib.world(), &mesh, false);
-    mesh.balance();
+    Omega_h::filesystem::path file_path = "/gpfs/u/home/MPFS/MPFSzhqg/barn-shared/cws/xgc-picparts/24k/4p/picpart";
+    file_path += std::to_string(rank);
+    file_path += ".osh";
+    Omega_h::binary::read(file_path, lib.self(), &mesh);
+
+    Omega_h::HostRead<Omega_h::LO> ownership_elements(mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership"));
+    Omega_h::HostRead<Omega_h::LO> ownership_vert(mesh.get_array<Omega_h::LO>(0, "ownership"));
+
+    dim = mesh.dim();
+    numVertices = std::count(ownership_vert.data(), ownership_vert.data()+ownership_vert.size(), rank);
+    numCells = std::count(ownership_elements.data(), ownership_elements.data()+ownership_elements.size(), rank);
+
+    // Get the coordinates of vertices
+    Omega_h::HostRead<Omega_h::Real> vertexCoords(mesh.coords());
+
+    // Get the vertices of each cell
+    Omega_h::HostRead<Omega_h::LO> cell(mesh.ask_elem_verts());
+
+    std::vector<int> core_cell;
+    for (int i = 0; i < ownership_elements.size(); i++)
+    {
+      if (ownership_elements.data()[i] == rank)
+      {
+        core_cell.push_back(cell[3*i]);
+        core_cell.push_back(cell[3*i+1]);
+        core_cell.push_back(cell[3*i+2]);
+      }
+      
+    }
+
+    assert(core_cell.size() == numCorners*numCells);
+    min_vert_id = *std::min_element(core_cell.begin(), core_cell.end());
+
+    std::vector<double> core_coord(dim*numVertices);
+    for (int i = 0; i < core_cell.size(); i++)
+    {
+      if (core_coord[2*i] == NULL && core_coord[2*i+1] == NULL)
+      {
+        core_coord.push_back(vertexCoords[2*i]);
+        core_coord.push_back(vertexCoords[2*i+1]);
+      }
+
+    }
+
+    // for_each(boundary_edge.begin(), boundary_edge.end(), [&numCells, &numVertices](int &n){ n=n+numCells+numVertices; });
+
+    ierr = DMPlexCreateFromCellList(comm, dim, numCells, numVertices, numCorners, PETSC_TRUE, &core_cell[0], dim, &core_coord[0], dm);CHKERRQ(ierr);
+
+    // mesh.balance();
+  }
+  else
+  {
+    std::cerr << "Select box or xgc for -mesh\n";
+    exit (EXIT_FAILURE);
   }
 
-  const int dim = mesh.dim();
-  const int numCells = mesh.nelems();
-  const int numVertices = mesh.nverts();
-  const int numCorners = 3;
-
-  // Get the coordinates of vertices
-  Omega_h::HostRead<Omega_h::Real> vertexCoords(mesh.coords());
-  assert(vertexCoords.size() == dim*numVertices);
-
-  // Get the vertices of each cell
-  Omega_h::HostRead<Omega_h::LO> cell(mesh.ask_elem_verts());
-  assert(cell.size() == numCorners*numCells);
-  
-  PetscErrorCode ierr;
-  ierr = DMPlexCreateFromCellList(comm, dim, numCells, numVertices, numCorners, PETSC_TRUE, cell.data(), dim, vertexCoords.data(), dm);CHKERRQ(ierr);
+  std::cerr << rank << " numCells: " << numCells << " numVertices: " << numVertices << "\n";
 
   // Get the starting and ending index for the topology
   PetscInt cStart, cEnd, vStart, vEnd, eStart, eEnd;
@@ -1089,6 +1154,11 @@ int main(int argc, char **argv)
   PetscErrorCode ierr;
 
   ierr = PetscInitialize(&argc, &argv, NULL,help);if (ierr) return ierr;
+
+  PetscLogStage stagenum0;
+  PetscLogStageRegister("Mesh creation", &stagenum0);
+  PetscLogStagePush(stagenum0);
+
   ierr = ProcessOptions(PETSC_COMM_WORLD, &user);CHKERRQ(ierr);
   ierr = SNESCreate(PETSC_COMM_WORLD, &snes);CHKERRQ(ierr);
   ierr = CreateMesh(PETSC_COMM_WORLD, &user, &dm);CHKERRQ(ierr);
@@ -1097,6 +1167,8 @@ int main(int argc, char **argv)
 
   ierr = PetscMalloc2(1, &user.exactFuncs, 1, &user.exactFields);CHKERRQ(ierr);
   ierr = SetupDiscretization(dm, &user);CHKERRQ(ierr);
+
+  PetscLogStagePop();
 
   ierr = DMCreateGlobalVector(dm, &u);CHKERRQ(ierr);
   ierr = PetscObjectSetName((PetscObject) u, "potential");CHKERRQ(ierr);
