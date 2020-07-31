@@ -16,9 +16,6 @@ list(APPEND ohFlags0Mod ${ohFlags1})
 set_property(TARGET Omega_h::omega_h PROPERTY
   INTERFACE_COMPILE_OPTIONS "${ohFlags0Mod}")
 
-add_executable(ex50 ex50.cpp)
-set_source_files_properties(ex50.cpp PROPERTIES LANGUAGE CUDA)
-target_link_libraries(ex50 Omega_h::omega_h PkgConfig::PETSC)
 
 add_executable(ex12 ex12.cpp)
 set_source_files_properties(ex12.cpp PROPERTIES LANGUAGE CUDA)
