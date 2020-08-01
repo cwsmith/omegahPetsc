@@ -565,21 +565,45 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     mesh.balance();
   }
 
+  int rank, size;
+  MPI_Comm_rank(comm, &rank);
+  MPI_Comm_size(comm, &size);
+
   const int dim = mesh.dim();
   const int numCells = mesh.nelems();
-  const int numVertices = mesh.nverts();
   const int numCorners = 3;
-
-  // Get the coordinates of vertices
-  Omega_h::HostRead<Omega_h::Real> vertexCoords(mesh.coords());
-  assert(vertexCoords.size() == dim*numVertices);
+  int numVertices;
+  if (rank == 0)
+  {
+    int total_vertices = mesh.nglobal_ents(0);
+    numVertices = total_vertices/size + total_vertices%size;
+  }
+  else
+  {
+    numVertices = mesh.nglobal_ents(0)/size;
+  }
 
   // Get the vertices of each cell
   Omega_h::HostRead<Omega_h::LO> cell(mesh.ask_elem_verts());
   assert(cell.size() == numCorners*numCells);
-  
+
+  Omega_h::HostRead<Omega_h::GO> global_vertex(mesh.globals(0));
+
+  // Get the coordinates of vertices
+  Omega_h::HostRead<Omega_h::Real> vertexCoords(mesh.coords());
+  std::cerr << vertexCoords.size() << "\n";
+
+  int global_cell[cell.size()];
+  for (int i = 0; i < cell.size(); i++)
+  {
+    global_cell[i] = global_vertex[cell.data()[i]];
+  }
+
+  std::cerr << rank << " numCells: " << numCells << " numVertices: " << numVertices << "\n";
+  std::cerr << "Min: " << *std::min_element(global_cell, global_cell+cell.size()) << " Max: " << *std::max_element(global_cell, global_cell+cell.size()) << "\n";
+
   PetscErrorCode ierr;
-  ierr = DMPlexCreateFromCellList(comm, dim, numCells, numVertices, numCorners, PETSC_TRUE, cell.data(), dim, vertexCoords.data(), dm);CHKERRQ(ierr);
+  ierr = DMPlexCreateFromCellListParallel(comm, dim, numCells, numVertices, numCorners, PETSC_TRUE, global_cell, dim, vertexCoords.data(), NULL, dm);CHKERRQ(ierr);
 
   // Get the starting and ending index for the topology
   PetscInt cStart, cEnd, vStart, vEnd, eStart, eEnd;
