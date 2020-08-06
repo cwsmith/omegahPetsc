@@ -19,6 +19,7 @@ Information on refinement:
 #include <petscsnes.h>
 #include <petscds.h>
 #include <petscviewerhdf5.h>
+#include <petscsf.h>
 #include <Omega_h_file.hpp>
 #include <Omega_h_library.hpp>
 #include <Omega_h_mesh.hpp>
@@ -572,38 +573,84 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   const int dim = mesh.dim();
   const int numCells = mesh.nelems();
   const int numCorners = 3;
-  int numVertices;
-  if (rank == 0)
-  {
-    int total_vertices = mesh.nglobal_ents(0);
-    numVertices = total_vertices/size + total_vertices%size;
-  }
-  else
-  {
-    numVertices = mesh.nglobal_ents(0)/size;
-  }
+  int numVertices = 0;
+
+  std::vector<double> global_coords; 
+
+  // auto vertex_owned = mesh.ask_owners(0).ranks;
+
+  // for (int i = 0; i < vertex_owned.size(); i++)
+  // {
+  //   if (rank == vertex_owned.get(i))
+  //   {
+  //     numVertices++;
+  //     global_coords.push_back(vertexCoords.get(2*i));
+  //     global_coords.push_back(vertexCoords.get(2*i+1));
+  //   }
+    
+  // }  
 
   // Get the vertices of each cell
-  Omega_h::HostRead<Omega_h::LO> cell(mesh.ask_elem_verts());
+  Omega_h::Read<Omega_h::LO> cell(mesh.ask_elem_verts());
   assert(cell.size() == numCorners*numCells);
 
-  Omega_h::HostRead<Omega_h::GO> global_vertex(mesh.globals(0));
-
   // Get the coordinates of vertices
-  Omega_h::HostRead<Omega_h::Real> vertexCoords(mesh.coords());
-  std::cerr << vertexCoords.size() << "\n";
+  Omega_h::Read<Omega_h::Real> vertexCoords = mesh.coords();
+
+  Omega_h::Read<Omega_h::GO> global_vertex(mesh.globals(0));
 
   int global_cell[cell.size()];
   for (int i = 0; i < cell.size(); i++)
   {
-    global_cell[i] = global_vertex[cell.data()[i]];
+    global_cell[i] = global_vertex.get(cell.get(i));
   }
 
+  // for (int i = 0; i < cell.size(); i+=3)
+  // {
+  //   printf("rank: %d, id %d: %d, %d, %d\n", rank, i/3, global_cell[i], global_cell[i+1], global_cell[i+2]);
+  // }
+
+  int total_vertices = mesh.nglobal_ents(0);
+  if (rank == 0)
+  {
+    numVertices = total_vertices/size + total_vertices%size;
+
+    // for (int i = 0; i < numVertices*2; i++)
+    // {
+    //   global_coords.push_back(vertexCoords.get(i));
+    // }
+  }
+  else
+  {
+    numVertices = total_vertices/size;
+
+    // for (int i = (rank*numVertices+total_vertices%size)*2; i < ((rank+1)*numVertices+total_vertices%size)*2; i++)
+    // {
+    //   global_coords.push_back(vertexCoords.get(i));
+    // }
+  }
+  // assert(global_coords.size() == 2*numVertices);
+  // for (int i = 0; i < global_coords.size(); i+=2)
+  // {
+  //   printf("id %d: %f, %f\n", i/2, global_coords[i], global_coords[i+1]);
+  // }
+
   std::cerr << rank << " numCells: " << numCells << " numVertices: " << numVertices << "\n";
-  std::cerr << "Min: " << *std::min_element(global_cell, global_cell+cell.size()) << " Max: " << *std::max_element(global_cell, global_cell+cell.size()) << "\n";
+  std::cerr << rank << " Min: " << *std::min_element(global_cell, global_cell+cell.size()) 
+                    << " Max: " << *std::max_element(global_cell, global_cell+cell.size()) << "\n";
 
   PetscErrorCode ierr;
-  ierr = DMPlexCreateFromCellListParallel(comm, dim, numCells, numVertices, numCorners, PETSC_TRUE, global_cell, dim, vertexCoords.data(), NULL, dm);CHKERRQ(ierr);
+  PetscSF sfVert;
+  ierr = DMCreate(comm, dm);CHKERRQ(ierr);
+  ierr = DMSetType(*dm, DMPLEX);CHKERRQ(ierr);
+  ierr = DMSetDimension(*dm, dim);CHKERRQ(ierr);
+  ierr = DMPlexBuildFromCellListParallel(*dm, numCells, numVertices, numCorners, global_cell, PETSC_FALSE, &sfVert);CHKERRQ(ierr);
+  PetscSFView(sfVert, PETSC_VIEWER_STDOUT_WORLD);
+  DM dm_int;
+  ierr = DMPlexInterpolate(*dm, &dm_int);
+  ierr = DMDestroy(dm);CHKERRQ(ierr);
+  *dm  = dm_int;
+   exit (EXIT_FAILURE);
 
   // Get the starting and ending index for the topology
   PetscInt cStart, cEnd, vStart, vEnd, eStart, eEnd;
@@ -866,9 +913,9 @@ static PetscErrorCode SetupProblem(DM dm, AppCtx *user)
     SETERRQ1(PETSC_COMM_WORLD, PETSC_ERR_ARG_OUTOFRANGE, "Invalid dimension %d", user->dim);
   }
   if (user->bcType != NONE) {
-    ierr = PetscDSAddBoundary(prob, user->bcType == DIRICHLET ? (user->fieldBC ? DM_BC_ESSENTIAL_FIELD : DM_BC_ESSENTIAL) : DM_BC_NATURAL,
-                              "wall", user->bcType == DIRICHLET ? "marker" : "boundary", 0, 0, NULL,
-                              user->fieldBC ? (void (*)(void)) user->exactFields[0] : (void (*)(void)) user->exactFuncs[0], 1, &id, user);CHKERRQ(ierr);
+    ierr = DMAddBoundary(dm, user->bcType == DIRICHLET ? (user->fieldBC ? DM_BC_ESSENTIAL_FIELD : DM_BC_ESSENTIAL) : DM_BC_NATURAL,
+                         "wall", user->bcType == DIRICHLET ? "marker" : "boundary", 0, 0, NULL,
+                         user->fieldBC ? (void (*)(void)) user->exactFields[0] : (void (*)(void)) user->exactFuncs[0], NULL, 1, &id, user);CHKERRQ(ierr);
   }
   ierr = PetscDSSetExactSolution(prob, 0, user->exactFuncs[0], user);CHKERRQ(ierr);
   PetscFunctionReturn(0);
