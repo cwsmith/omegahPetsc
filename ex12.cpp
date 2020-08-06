@@ -565,6 +565,11 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     Omega_h::binary::read("24k.osh", lib.world(), &mesh, false);
     mesh.balance();
   }
+  else
+  {
+    std::cerr << "Select box or xgc for -mesh\n";
+    exit (EXIT_FAILURE);
+  }
 
   int rank, size;
   MPI_Comm_rank(comm, &rank);
@@ -1160,6 +1165,11 @@ int main(int argc, char **argv)
   PetscErrorCode ierr;
 
   ierr = PetscInitialize(&argc, &argv, NULL,help);if (ierr) return ierr;
+  
+  PetscLogStage stagenum0;
+  PetscLogStageRegister("Mesh creation", &stagenum0);
+  PetscLogStagePush(stagenum0);
+
   ierr = ProcessOptions(PETSC_COMM_WORLD, &user);CHKERRQ(ierr);
   ierr = SNESCreate(PETSC_COMM_WORLD, &snes);CHKERRQ(ierr);
   ierr = CreateMesh(PETSC_COMM_WORLD, &user, &dm);CHKERRQ(ierr);
@@ -1168,6 +1178,8 @@ int main(int argc, char **argv)
 
   ierr = PetscMalloc2(1, &user.exactFuncs, 1, &user.exactFields);CHKERRQ(ierr);
   ierr = SetupDiscretization(dm, &user);CHKERRQ(ierr);
+
+  PetscLogStagePop();
 
   ierr = DMCreateGlobalVector(dm, &u);CHKERRQ(ierr);
   ierr = PetscObjectSetName((PetscObject) u, "potential");CHKERRQ(ierr);
