@@ -646,7 +646,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   ierr = DMCreate(comm, dm);CHKERRQ(ierr);
   ierr = DMSetType(*dm, DMPLEX);CHKERRQ(ierr);
   ierr = DMSetDimension(*dm, dim);CHKERRQ(ierr);
-  ierr = DMPlexBuildFromCellListParallel(*dm, numCells, numVertices, numCorners, global_cell, PETSC_FALSE, &sfVert);CHKERRQ(ierr);
+  ierr = DMPlexBuildFromCellListParallel(*dm, numCells, numVertices, numCorners, global_cell, &sfVert);CHKERRQ(ierr);
   PetscSFView(sfVert, PETSC_VIEWER_STDOUT_WORLD);
   DM dm_int;
   ierr = DMPlexInterpolate(*dm, &dm_int);
