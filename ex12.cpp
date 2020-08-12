@@ -580,10 +580,9 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   const int dim = mesh.dim();
   const int numCells = mesh.nelems();
   const int numCorners = 3;
-  int numVertices = 0;
 
-  Omega_h::HostRead<Omega_h::I32> vertex_owned(mesh.ask_owners(0).ranks);
-  numVertices = std::count(vertex_owned.data(), vertex_owned.data()+vertex_owned.size(), rank);
+  Omega_h::Read<Omega_h::LO> vertex_owned = mesh.ask_owners(0).ranks;
+  int numOwnedVertices = std::count(vertex_owned.data(), vertex_owned.data()+vertex_owned.size(), rank);
 
   // Get the vertices of each cell
   Omega_h::Read<Omega_h::LO> cell(mesh.ask_elem_verts());
@@ -592,67 +591,64 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   // Get the coordinates of vertices
   Omega_h::Read<Omega_h::Real> vertexCoords = mesh.coords();
 
-  Omega_h::Read<Omega_h::GO> global_vertex(mesh.globals(0));
+  Omega_h::Read<Omega_h::GO> global_vertex = mesh.globals(0);
 
   int *global_cell = new int[cell.size()];
   for (int i = 0; i < cell.size(); i++)
   {
-    global_cell[i] = global_vertex.get(cell.get(i));
+    global_cell[i] = global_vertex[cell[i]];
   }
 
-  std::vector<int> temp = {0, 1, 2, 8, 3, 4, 5, 7, 6};
-  for (int i = 0; i < cell.size(); i++)
-  {
-    global_cell[i] = temp[global_cell[i]];
+  //=====
+  //uncomment the following loop to force rank 0 to have
+  //non-sequential global vertex numbering
+  //=====
+  //std::vector<int> temp = {0, 1, 2, 8, 3, 4, 5, 7, 6};
+  //for (int i = 0; i < cell.size(); i++)
+  //{
+  //  global_cell[i] = temp[global_cell[i]];
+  //}
+
+  for (int r = 0; r < size; r++)
+  { //serialize over ranks for clean printing
+    if(rank == r)
+    {
+      for (int i = 0; i < vertex_owned.size(); i++)
+      {
+        if(vertex_owned[i] == rank)
+        {
+          fprintf(stderr, "rank: %d, vtxGID %ld: %0.2f, %0.2f\n", rank,
+              global_vertex[i], vertexCoords[(i*2)], vertexCoords[(i*2)+1]);
+        }
+      }
+      
+      for (int i = 0; i < cell.size(); i+=3)
+      {
+        fprintf(stderr, "rank: %d, elmIdx %d: %d, %d, %d\n", rank,
+            i/3, global_cell[i], global_cell[i+1], global_cell[i+2]);
+      }
+      std::cerr << rank << " numCells: " << numCells << " numOwnedVertices: " << numOwnedVertices << "\n";
+      std::cerr << rank << " Min(GlobalVtxId): " << *std::min_element(global_cell, global_cell+cell.size()) 
+                        << " Max(GlobalVtxId): " << *std::max_element(global_cell, global_cell+cell.size()) << "\n";
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
   }
-  
-  for (int i = 0; i < cell.size(); i+=3)
-  {
-    printf("rank: %d, id %d: %d, %d, %d\n", rank, i/3, global_cell[i], global_cell[i+1], global_cell[i+2]);
-  }
-
-  // std::vector<double> global_coords; 
-  // int total_vertices = mesh.nglobal_ents(0);
-  // if (rank == 0)
-  // {
-  //   numVertices = total_vertices/size + total_vertices%size;
-
-  //   for (int i = 0; i < numVertices*2; i++)
-  //   {
-  //     global_coords.push_back(vertexCoords.get(i));
-  //   }
-  // }
-  // else
-  // {
-  //   numVertices = total_vertices/size;
-
-  //   for (int i = (rank*numVertices+total_vertices%size)*2; i < ((rank+1)*numVertices+total_vertices%size)*2; i++)
-  //   {
-  //     global_coords.push_back(vertexCoords.get(i));
-  //   }
-  // }
-  // assert(global_coords.size() == 2*numVertices);
-  // for (int i = 0; i < global_coords.size(); i+=2)
-  // {
-  //   printf("id %d: %f, %f\n", i/2, global_coords[i], global_coords[i+1]);
-  // }
-
-  std::cerr << rank << " numCells: " << numCells << " numVertices: " << numVertices << "\n";
-  std::cerr << rank << " Min: " << *std::min_element(global_cell, global_cell+cell.size()) 
-                    << " Max: " << *std::max_element(global_cell, global_cell+cell.size()) << "\n";
 
   PetscErrorCode ierr;
   PetscSF sfVert;
   ierr = DMCreate(comm, dm);CHKERRQ(ierr);
   ierr = DMSetType(*dm, DMPLEX);CHKERRQ(ierr);
   ierr = DMSetDimension(*dm, dim);CHKERRQ(ierr);
-  ierr = DMPlexBuildFromCellListParallel(*dm, numCells, numVertices, numCorners, global_cell, &sfVert);CHKERRQ(ierr);
+  ierr = DMPlexBuildFromCellListParallel(*dm, numCells, numOwnedVertices, numCorners, global_cell, &sfVert);CHKERRQ(ierr);
+  MPI_Barrier(MPI_COMM_WORLD);
   PetscSFView(sfVert, PETSC_VIEWER_STDOUT_WORLD);
   DM dm_int;
   ierr = DMPlexInterpolate(*dm, &dm_int);
   ierr = DMDestroy(dm);CHKERRQ(ierr);
   *dm  = dm_int;
   delete [] global_cell;
+  fprintf(stderr, "%d exiting\n", rank);
+  MPI_Barrier(MPI_COMM_WORLD);
    exit (EXIT_FAILURE);
 
   // Get the starting and ending index for the topology
