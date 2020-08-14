@@ -224,13 +224,13 @@ make
 ```
 
 
-# Alternative instructions for a serial build of petsc and omegah for easier debugging
+# Alternative instructions for a build of petsc and omegah with cuda disabled for easier debugging
 
 ## petsc
 
 
-envGnu74Serial.sh
-
+the following script, `envGnu74CudaOff.sh`, substitutes `envGnu74Cuda.sh` from the parallel build
+arch
 ```
 module use /gpfs/u/software/dcs-spack-install/v0133gccSpectrum/lmod/linux-rhel7-ppc64le/gcc/7.4.0-1/
 module load spectrum-mpi/10.3-doq6u5y
@@ -247,7 +247,7 @@ export OMPI_CC=gcc
 export OMPI_FC=gfortran
 ```
 
-arch-aimos-serial.py
+the following script, `arch-aimos-cudaOff.py`, substitutes for `arch-aimos.py`
 
 ```
 #!/usr/bin/python
@@ -275,7 +275,7 @@ if __name__ == '__main__':
 
 ## omegah
 
-envOmegaAimosGcc.sh
+the following script, `envOmegaCudaOffAimosGcc.sh`, substitutes for `~/barn/omega_h/envOmegaAimosGcc.sh`
 
 ```
 module use /gpfs/u/software/dcs-spack-install/v0133gccSpectrum/lmod/linux-rhel7-ppc64le/gcc/7.4.0-1/
@@ -286,20 +286,25 @@ module load cmake/3.15.4-mnqjvz6
 export OMPI_CXX=g++
 ```
 
-doConfigOmegaSerial.sh
+the following `cmake` command should be ran instead of the one listed in the parallel section
 
 ```
+source ~/barn/omega_h/envOmegaCudaOffAimosGcc.sh 
+mkdir ~/barn/build-omegahCudaOff-AimosGcc74
+cd !$
 cmake ~/barn/omega_h \
 -DCMAKE_INSTALL_PREFIX=$PWD/install \
 -DBUILD_SHARED_LIBS=OFF \
 -DOmega_h_USE_CUDA=off \
 -DOmega_h_USE_MPI=on \
 -DCMAKE_CXX_COMPILER=`which mpicxx`
+
+make install -j16 
 ```
 
 ## omegahPetsc
 
-envOmegahSerialPetscGccSpectrum.sh
+the following script, `envOmegahCudaOffPetscGccSpectrum.sh`, substitutes for `~/barn/omegahPetsc/envOmegahPetscGccSpectrum.sh`
 
 ```
 module use /gpfs/u/software/dcs-spack-install/v0133gccSpectrum/lmod/linux-rhel7-ppc64le/gcc/7.4.0-1/
@@ -309,12 +314,16 @@ module load cmake/3.15.4-mnqjvz6
 
 export OMPI_CXX=g++
 
-export CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH:~/barn/build-omegahSerial-AimosGcc74/install/lib/cmake
-export PKG_CONFIG_PATH=$PKG_CONFIG_PATH:~/barn/petsc/arch-aimos-serial/lib/pkgconfig
+export CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH:~/barn/build-omegahCudaOff-AimosGcc74/install/lib/cmake
+export PKG_CONFIG_PATH=$PKG_CONFIG_PATH:~/barn/petsc/arch-aimos-cudaOff/lib/pkgconfig
 ```
 
-doConfigSerial.sh
+doConfigCudaOff.sh
 
 ```
+source ~/barn/omegahPetsc/envOmegahCudaOffPetscGccSpectrum.sh
+mkdir build-omegahPetsc-cudaOff
+cd !$
 cmake ../omegahPetsc/ -DCMAKE_CXX_COMPILER=mpicxx
+make
 ```
