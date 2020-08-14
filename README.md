@@ -304,6 +304,16 @@ make install -j16
 
 ## omegahPetsc
 
+The `parallel_box_test_nocuda` branch is required to run without cuda:
+
+https://github.com/cwsmith/omegahPetsc/commit/1d339dfd3ffb8b3c90fc699a1e91883a6bf66696
+
+Run the following command to switch branches:
+
+```
+git checkout parallel_box_test_nocuda
+```
+
 the following script, `envOmegahCudaOffPetscGccSpectrum.sh`, substitutes for `~/barn/omegahPetsc/envOmegahPetscGccSpectrum.sh`
 
 ```
