@@ -222,3 +222,99 @@ cd !$
 cmake ../omegahPetsc/ -DCMAKE_CUDA_HOST_COMPILER=mpicxx -DCMAKE_CUDA_FLAGS="-arch=sm_70"
 make
 ```
+
+
+# Alternative instructions for a serial build of petsc and omegah for easier debugging
+
+## petsc
+
+
+envGnu74Serial.sh
+
+```
+module use /gpfs/u/software/dcs-spack-install/v0133gccSpectrum/lmod/linux-rhel7-ppc64le/gcc/7.4.0-1/
+module load spectrum-mpi/10.3-doq6u5y
+module load gcc/7.4.0/1
+module load \
+  cmake/3.15.4-mnqjvz6 \
+  netlib-lapack \
+  hdf5 \
+  parmetis/4.0.3-int32-real32-nreyjmh \
+  hypre/2.18.1-int32-rgc66ne
+
+export OMPI_CXX=g++
+export OMPI_CC=gcc
+export OMPI_FC=gfortran
+```
+
+arch-aimos-serial.py
+
+```
+#!/usr/bin/python
+if __name__ == '__main__':
+  import os
+  import sys
+  sys.path.insert(0, os.path.abspath('config'))
+  import configure
+  configure_options = [
+    '--with-cc=mpicc',
+    '--with-cxx=mpiCC',
+    '--with-fc=mpif90',
+    '--with-shared-libraries=1',
+    '--with-debugging=yes',
+    '--COPTFLAGS=-g -O2 -mcpu=power9 -fPIC',
+    '--CXXOPTFLAGS=-g -O2 -mcpu=power9 -fPIC',
+    '--FOPTFLAGS=-g -O2 -mcpu=power9 -fPIC',
+    '--with-blaslapack-lib=-L' + os.environ['NETLIB_LAPACK_ROOT'] + '/lib64 -lblas -llapack',
+    '--with-parmetis-dir=' + os.environ['PARMETIS_ROOT'],
+    '--with-metis-dir=' + os.environ['METIS_ROOT'],
+    '--with-make-np=16',
+  ]
+  configure.petsc_configure(configure_options)
+```
+
+## omegah
+
+envOmegaAimosGcc.sh
+
+```
+module use /gpfs/u/software/dcs-spack-install/v0133gccSpectrum/lmod/linux-rhel7-ppc64le/gcc/7.4.0-1/
+module load spectrum-mpi/10.3-doq6u5y
+module load gcc/7.4.0/1
+module load cmake/3.15.4-mnqjvz6
+
+export OMPI_CXX=g++
+```
+
+doConfigOmegaSerial.sh
+
+```
+cmake ~/barn/omega_h \
+-DCMAKE_INSTALL_PREFIX=$PWD/install \
+-DBUILD_SHARED_LIBS=OFF \
+-DOmega_h_USE_CUDA=off \
+-DOmega_h_USE_MPI=on \
+-DCMAKE_CXX_COMPILER=`which mpicxx`
+```
+
+## omegahPetsc
+
+envOmegahSerialPetscGccSpectrum.sh
+
+```
+module use /gpfs/u/software/dcs-spack-install/v0133gccSpectrum/lmod/linux-rhel7-ppc64le/gcc/7.4.0-1/
+module load spectrum-mpi/10.3-doq6u5y
+module load gcc/7.4.0/1
+module load cmake/3.15.4-mnqjvz6
+
+export OMPI_CXX=g++
+
+export CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH:~/barn/build-omegahSerial-AimosGcc74/install/lib/cmake
+export PKG_CONFIG_PATH=$PKG_CONFIG_PATH:~/barn/petsc/arch-aimos-serial/lib/pkgconfig
+```
+
+doConfigSerial.sh
+
+```
+cmake ../omegahPetsc/ -DCMAKE_CXX_COMPILER=mpicxx
+```
