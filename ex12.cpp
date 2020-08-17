@@ -19,11 +19,14 @@ Information on refinement:
 #include <petscsnes.h>
 #include <petscds.h>
 #include <petscviewerhdf5.h>
+#include <petscsf.h>
+#include <petscviewer.h>
 #include <Omega_h_file.hpp>
 #include <Omega_h_library.hpp>
 #include <Omega_h_mesh.hpp>
 #include <Omega_h_comm.hpp>
 #include <Omega_h_build.hpp>
+#include <Omega_h_mark.hpp>
 #include <algorithm>
 #include <vector>
 #include <set>
@@ -586,9 +589,84 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   // Get the vertices of each cell
   Omega_h::HostRead<Omega_h::LO> cell(mesh.ask_elem_verts());
   assert(cell.size() == numCorners*numCells);
+
+  Omega_h::Read<Omega_h::I32> vert_owned_rank = mesh.ask_owners(0).ranks;
+  Omega_h::Read<Omega_h::LO> vert_owned_id = mesh.ask_owners(0).idxs;
+
+  Omega_h::Read<Omega_h::I8> exposed_edges = Omega_h::mark_exposed_sides(&mesh);
+  Omega_h::Read<Omega_h::LO> vert_to_edge = mesh.ask_verts_of(1);
+  std::vector<int> exposed_verts(numVertices, 0);
+  for (int i = 0; i < exposed_edges.size(); i++)
+  {
+    if (exposed_edges[i] == 1)
+    {
+      exposed_verts[vert_to_edge[2*i]] = 1;
+      exposed_verts[vert_to_edge[2*i+1]] = 1;
+    }
+    
+  }
+  
+  for (int i = 0; i < exposed_edges.size(); i++)
+  {
+    printf("rank: %d, %d\n", rank, exposed_edges[i]);
+  }
   
   PetscErrorCode ierr;
-  ierr = DMPlexCreateFromCellList(comm, dim, numCells, numVertices, numCorners, PETSC_TRUE, cell.data(), dim, vertexCoords.data(), dm);CHKERRQ(ierr);
+  ierr = DMPlexCreateFromCellListPetsc(comm, dim, numCells, numVertices, numCorners, PETSC_FALSE, cell.data(), dim, vertexCoords.data(), dm);CHKERRQ(ierr);
+
+  PetscSF pointSF;
+  int numVerticesGhost = 0;
+  for (int i = 0; i < vert_owned_rank.size(); i++)
+  {
+    if (rank != vert_owned_rank[i])
+    {
+      numVerticesGhost++;
+    }
+  }
+  int *localVertex = new int[numVerticesGhost];
+  PetscSFNode *remoteVertex = new PetscSFNode[numVerticesGhost];
+  for (int i = 0, j = 0; i < vert_owned_rank.size(); i++)
+  {
+    if (rank != vert_owned_rank[i])
+    {
+      localVertex[j] = numCells+i;
+      remoteVertex[j].index = vert_owned_id[i]+numCells;
+      remoteVertex[j].rank = vert_owned_rank[i];
+      j++;
+    }
+  }
+  
+  ierr = DMGetPointSF(*dm, &pointSF);CHKERRQ(ierr);
+  ierr = PetscSFSetGraph(pointSF, numCells+numVertices, numVerticesGhost, localVertex, PETSC_OWN_POINTER, remoteVertex, PETSC_OWN_POINTER);CHKERRQ(ierr);
+
+  // std::vector<int> pointsToRewrite;
+  // std::vector<int> targetOwners;
+  // for (int i = 0; i < vert_owned_rank.size(); i++)
+  // {
+  //   if (rank != vert_owned_rank.get(i))
+  //   {
+  //     pointsToRewrite.push_back(numCells+i);
+  //     targetOwners.push_back(vert_owned_rank.get(i));
+  //   }
+  // }
+  // const int *degrees;
+  // ierr = PetscSFComputeDegreeBegin(pointSF, &degrees);
+  // ierr = PetscSFComputeDegreeEnd(pointSF, &degrees);
+  // for (int i = 0; i < sizeof(degrees)/sizeof(degrees[0]); i++)
+  // {
+  //   printf("rank: %d, %d\n", rank, degrees[i]);
+  // }
+  // ierr = DMPlexRewriteSF(*dm, pointsToRewrite.size(), pointsToRewrite.data(), targetOwners.data(), degrees);
+  PetscSFView(pointSF, PETSC_VIEWER_STDOUT_WORLD);
+  delete [] localVertex;
+  delete [] remoteVertex; 
+
+  DM dm_int;
+  ierr = DMPlexInterpolate(*dm, &dm_int);
+  ierr = DMDestroy(dm);CHKERRQ(ierr);
+  *dm  = dm_int;
+
+  exit(EXIT_FAILURE);
 
   // Get the starting and ending index for the topology
   PetscInt cStart, cEnd, vStart, vEnd, eStart, eEnd;
@@ -851,9 +929,9 @@ static PetscErrorCode SetupProblem(DM dm, AppCtx *user)
     SETERRQ1(PETSC_COMM_WORLD, PETSC_ERR_ARG_OUTOFRANGE, "Invalid dimension %d", user->dim);
   }
   if (user->bcType != NONE) {
-    ierr = PetscDSAddBoundary(prob, user->bcType == DIRICHLET ? (user->fieldBC ? DM_BC_ESSENTIAL_FIELD : DM_BC_ESSENTIAL) : DM_BC_NATURAL,
-                              "wall", user->bcType == DIRICHLET ? "marker" : "boundary", 0, 0, NULL,
-                              user->fieldBC ? (void (*)(void)) user->exactFields[0] : (void (*)(void)) user->exactFuncs[0], 1, &id, user);CHKERRQ(ierr);
+    ierr = DMAddBoundary(dm, user->bcType == DIRICHLET ? (user->fieldBC ? DM_BC_ESSENTIAL_FIELD : DM_BC_ESSENTIAL) : DM_BC_NATURAL,
+                         "wall", user->bcType == DIRICHLET ? "marker" : "boundary", 0, 0, NULL,
+                         user->fieldBC ? (void (*)(void)) user->exactFields[0] : (void (*)(void)) user->exactFuncs[0], NULL, 1, &id, user);CHKERRQ(ierr);
   }
   ierr = PetscDSSetExactSolution(prob, 0, user->exactFuncs[0], user);CHKERRQ(ierr);
   PetscFunctionReturn(0);
