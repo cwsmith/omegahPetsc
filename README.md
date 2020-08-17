@@ -337,3 +337,131 @@ cd !$
 cmake ../omegahPetsc/ -DCMAKE_CXX_COMPILER=mpicxx
 make
 ```
+
+# Build on SCOREC RHEL7 with cuda disabled
+
+## petsc
+
+```
+mkdir ~/develop
+cd ~/develop
+git clone https://gitlab.com/petsc/petsc.git
+cd petsc
+git checkout master
+```
+
+environment script `~/develop/petsc/envNoCuda.sh`
+
+```
+module use /opt/scorec/spack/v0132/lmod/linux-rhel7-x86_64/Core
+module load gcc mpich 
+module load \
+  cmake \
+  hdf5 \
+  parmetis/4.0.3-int32-uuza7iv \
+  hypre/2.18.1-int32-y2p4vsy
+export MPICH_CXX=g++
+export MPICH_CC=gcc
+export MPICH_FC=gfortran
+```
+
+configure script `~/develop/petsc/arch-rhel7-nocuda.py`
+
+```
+#!/usr/bin/python
+if __name__ == '__main__':
+  import os
+  import sys
+  sys.path.insert(0, os.path.abspath('config'))
+  import configure
+  configure_options = [
+    '--with-cc=mpicc',
+    '--with-cxx=mpicxx',
+    '--with-fc=mpif90',
+    '--with-shared-libraries=1',
+    '--with-debugging=yes',
+    '--COPTFLAGS=-g -O2 -mcpu=power9 -fPIC',
+    '--CXXOPTFLAGS=-g -O2 -mcpu=power9 -fPIC',
+    '--FOPTFLAGS=-g -O2 -mcpu=power9 -fPIC',
+    '--with-parmetis-dir=' + os.environ['PARMETIS_ROOT'],
+    '--with-metis-dir=' + os.environ['METIS_ROOT'],
+    '--with-make-np=8',
+  ] 
+  configure.petsc_configure(configure_options)
+```
+
+build
+
+```
+source envNoCuda.sh
+./arch-rhe7-nocuda.py
+#follow the instructions in the petsc configure output to run make
+```
+
+
+## omegah
+
+```
+cd ~/develop
+git clone https://github.com/SNLComputation/omega_h.git
+cd omega_h
+git checkout v9.32.1
+```
+
+environment script `~/develop/omega_h/envRhel7v0132_noCuda.sh`
+
+```
+module use /opt/scorec/spack/v0132/lmod/linux-rhel7-x86_64/Core
+module load gcc mpich cmake
+export MPICH_CXX=g++
+```
+
+build
+
+```
+source ~/develop/omega_h/envRhel7v0132_noCuda.sh
+mkdir ~/develop/build-omegahCudaOff-rhel7
+cd !$
+cmake ~/develop/omega_h \
+-DCMAKE_INSTALL_PREFIX=$PWD/install \
+-DBUILD_SHARED_LIBS=OFF \
+-DOmega_h_USE_MPI=on \
+-DCMAKE_CXX_COMPILER=`which mpicxx`
+
+make install -j16 
+```
+
+## omegahPetsc
+
+The `parallel_box_test_nocuda` branch is required to run without cuda:
+
+https://github.com/cwsmith/omegahPetsc/commit/1d339dfd3ffb8b3c90fc699a1e91883a6bf66696
+
+Run the following command to switch branches:
+
+```
+cd 
+git clone https://github.com/cwsmith/omegahPetsc.git
+git checkout parallel_box_test_nocuda
+```
+
+environment script `~/develop/omegahPetsc/envRhel7v0132_noCuda.sh`
+
+```
+module use /opt/scorec/spack/v0132/lmod/linux-rhel7-x86_64/Core
+module load gcc mpich cmake
+export MPICH_CXX=g++
+
+export CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH:~/develop/build-omegahCudaOff-rhel7/install/lib/cmake
+export PKG_CONFIG_PATH=$PKG_CONFIG_PATH:~/develop/petsc/arch-rhel7-nocuda/lib/pkgconfig
+```
+
+build
+
+```
+source ~/develop/omegahPetsc/envRhel7v0132_noCuda.sh
+mkdir ~/develop/build-omegahPetsc-cudaOff
+cd !$
+cmake ../omegahPetsc/ -DCMAKE_CXX_COMPILER=mpicxx
+make
+```
