@@ -66,7 +66,7 @@ typedef struct {
   PC             pcmg;              /* This is needed for error monitoring */
   PetscBool      checkksp;          /* Whether to check the KSPSolve for runType == RUN_TEST */
 
-  char           mesh_type[4] = "box";
+  char           mesh_type[512] = "box";
 } AppCtx;
 
 static PetscErrorCode zero(PetscInt dim, PetscReal time, const PetscReal x[], PetscInt Nc, PetscScalar *u, void *ctx)
@@ -501,7 +501,7 @@ static PetscErrorCode ProcessOptions(MPI_Comm comm, AppCtx *options)
   if (options->runType == RUN_TEST) {
     ierr = PetscOptionsBool("-run_test_check_ksp", "Check solution of KSP", "ex12.c", options->checkksp, &options->checkksp, NULL);CHKERRQ(ierr);
   }
-  ierr = PetscOptionsString("-mesh", "Use box or xgc mesh", "ex12.c", options->mesh_type, options->mesh_type, sizeof(options->mesh_type), &flg);CHKERRQ(ierr);
+  ierr = PetscOptionsString("-mesh", "Use box or /path/to/omegah/mesh", "ex12.c", options->mesh_type, options->mesh_type, sizeof(options->mesh_type), &flg);CHKERRQ(ierr);
   ierr = PetscOptionsEnd();
   ierr = PetscLogEventRegister("CreateMesh", DM_CLASSID, &options->createMeshEvent);CHKERRQ(ierr);
   PetscFunctionReturn(0);
@@ -562,15 +562,10 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   {
     mesh = Omega_h::build_box(lib.world(), OMEGA_H_SIMPLEX, 1., 1., 0, 2, 2, 0);
   }
-  else if (strcmp(options->mesh_type, "xgc") == 0)
-  {
-    Omega_h::binary::read("24k.osh", lib.world(), &mesh, false);
-    mesh.balance();
-  }
   else
   {
-    std::cerr << "Select box or xgc for -mesh\n";
-    exit (EXIT_FAILURE);
+    Omega_h::binary::read(options->mesh_type, lib.world(), &mesh, false);
+    mesh.balance();
   }
 
   const int dim = mesh.dim();
