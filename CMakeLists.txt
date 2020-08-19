@@ -29,10 +29,8 @@ target_compile_options(ex12 PRIVATE
   $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
   -Wno-unused-parameter>)
 
-include(CTest)
-add_test(ex12_24kxgc mpirun -np 2 ./ex12
-  -mesh ${CMAKE_SOURCE_DIR}/24k.osh
-  -run_type full
+set(petscArgs
+  "-run_type full
   -petscpartitioner_type parmetis
   -dm_refine 0
   -bc_type dirichlet
@@ -50,27 +48,33 @@ add_test(ex12_24kxgc mpirun -np 2 ./ex12
   -ksp_converged_reason
   -snes_view
   -show_solution 0
-  -log_view
-  -vec_view vtk:24k_sol.vtu:vtk_vtu)
+  -log_view")
 
-add_test(ex12_box mpirun -np 2 ./ex12
+include(CTest)
+
+function(mpiTest TESTNAME PROCS EXE)
+  add_test(
+    NAME ${TESTNAME}_p${PROCS}
+    COMMAND mpirun -np ${PROCS} ${EXE} ${ARGN}
+  )
+endfunction(mpiTest)
+
+mpiTest(24kxgc 2 ./ex12
+    -mesh ${CMAKE_SOURCE_DIR}/24k.osh
+    -vec_view vtk:24k_p2_sol.vtu:vtk_vtu
+    ${petscArgs})
+
+mpiTest(24kxgc 4 ./ex12
+    -mesh ${CMAKE_SOURCE_DIR}/24k.osh
+    -vec_view vtk:24k_p4_sol.vtu:vtk_vtu
+    ${petscArgs})
+
+mpiTest(box 2 ./ex12
   -mesh box
-  -run_type full
-  -petscpartitioner_type parmetis
-  -dm_refine 0
-  -bc_type dirichlet
-  -interpolate 1
-  -petscspace_degree 1
-  -ksp_type gmres
-  -ksp_gmres_restart 100
-  -ksp_rtol 1.0e-9
-  -dm_mat_type is
-  -pc_type bddc
-  -snes_monitor_short
-  -ksp_monitor_short
-  -snes_converged_reason
-  ::ascii_info_detail
-  -ksp_converged_reason
-  -show_solution 0
-  -log_view
-  -vec_view vtk:box_sol.vtu:vtk_vtu)
+  -vec_view vtk:box_p2_sol.vtu:vtk_vtu
+  ${petscArgs})
+
+mpiTest(box 4 ./ex12
+  -mesh box
+  -vec_view vtk:box_p4_sol.vtu:vtk_vtu
+  ${petscArgs})
