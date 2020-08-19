@@ -50,7 +50,8 @@ add_test(ex12_24kxgc mpirun -np 2 ./ex12
   -ksp_converged_reason
   -snes_view
   -show_solution 0
-  -log_view)
+  -log_view
+  -vec_view vtk:24k_sol.vtu:vtk_vtu)
 
 add_test(ex12_box mpirun -np 2 ./ex12
   -mesh box
@@ -71,4 +72,5 @@ add_test(ex12_box mpirun -np 2 ./ex12
   ::ascii_info_detail
   -ksp_converged_reason
   -show_solution 0
-  -log_view)
+  -log_view
+  -vec_view vtk:box_sol.vtu:vtk_vtu)
