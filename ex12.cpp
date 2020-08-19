@@ -747,9 +747,7 @@ static PetscErrorCode CreateMesh(MPI_Comm comm, AppCtx *user, DM *dm)
     ierr = DMPlexSetRefinementUniform(*dm, PETSC_FALSE);CHKERRQ(ierr);
   }
   {
-    PetscPartitioner part;
     DM               refinedMesh     = NULL;
-    DM               distributedMesh = NULL;
 
     /* Refine mesh using a volume constraint */
     if (refinementLimit > 0.0) {
@@ -765,6 +763,8 @@ static PetscErrorCode CreateMesh(MPI_Comm comm, AppCtx *user, DM *dm)
       }
     }
     /* Distribute mesh over processes */
+    // PetscPartitioner part;
+    // DM distributedMesh = NULL;
     // ierr = DMPlexGetPartitioner(*dm,&part);CHKERRQ(ierr);
     // ierr = PetscPartitionerSetFromOptions(part);CHKERRQ(ierr);
     // ierr = DMPlexDistribute(*dm, 0, NULL, &distributedMesh);CHKERRQ(ierr);
