@@ -70,6 +70,5 @@ add_test(ex12_box mpirun -np 2 ./ex12
   -snes_converged_reason
   ::ascii_info_detail
   -ksp_converged_reason
-  -snes_view
   -show_solution 0
   -log_view)
