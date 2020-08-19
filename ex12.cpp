@@ -605,12 +605,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     }
     
   }
-  
-  for (int i = 0; i < exposed_edges.size(); i++)
-  {
-    printf("rank: %d, %d\n", rank, exposed_edges[i]);
-  }
-  
+
   PetscErrorCode ierr;
   ierr = DMPlexCreateFromCellListPetsc(comm, dim, numCells, numVertices, numCorners, PETSC_FALSE, cell.data(), dim, vertexCoords.data(), dm);CHKERRQ(ierr);
 
@@ -618,13 +613,15 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   int numVerticesGhost = 0;
   for (int i = 0; i < vert_owned_rank.size(); i++)
   {
-    if (rank != vert_owned_rank[i])
+    if (rank != vert_owned_rank[i] && exposed_verts[i] == 1)
     {
       numVerticesGhost++;
     }
   }
-  int *localVertex = new int[numVerticesGhost];
-  PetscSFNode *remoteVertex = new PetscSFNode[numVerticesGhost];
+  int *localVertex;
+  PetscSFNode *remoteVertex;
+  ierr = PetscMalloc1(numVerticesGhost, &localVertex);CHKERRQ(ierr);
+  ierr = PetscMalloc1(numVerticesGhost, &remoteVertex);CHKERRQ(ierr);
   for (int i = 0, j = 0; i < vert_owned_rank.size(); i++)
   {
     if (rank != vert_owned_rank[i])
@@ -650,23 +647,20 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   //   }
   // }
   // const int *degrees;
-  // ierr = PetscSFComputeDegreeBegin(pointSF, &degrees);
-  // ierr = PetscSFComputeDegreeEnd(pointSF, &degrees);
+  // ierr = PetscSFComputeDegreeBegin(pointSF, &degrees);CHKERRQ(ierr);
+  // ierr = PetscSFComputeDegreeEnd(pointSF, &degrees);CHKERRQ(ierr);
   // for (int i = 0; i < sizeof(degrees)/sizeof(degrees[0]); i++)
   // {
   //   printf("rank: %d, %d\n", rank, degrees[i]);
   // }
-  // ierr = DMPlexRewriteSF(*dm, pointsToRewrite.size(), pointsToRewrite.data(), targetOwners.data(), degrees);
+  // ierr = DMPlexRewriteSF(*dm, pointsToRewrite.size(), pointsToRewrite.data(), targetOwners.data(), degrees);CHKERRQ(ierr);
+  
   PetscSFView(pointSF, PETSC_VIEWER_STDOUT_WORLD);
-  delete [] localVertex;
-  delete [] remoteVertex; 
 
   DM dm_int;
   ierr = DMPlexInterpolate(*dm, &dm_int);
   ierr = DMDestroy(dm);CHKERRQ(ierr);
   *dm  = dm_int;
-
-  exit(EXIT_FAILURE);
 
   // Get the starting and ending index for the topology
   PetscInt cStart, cEnd, vStart, vEnd, eStart, eEnd;
