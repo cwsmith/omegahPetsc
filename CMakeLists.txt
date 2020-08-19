@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.13.0)
 
-project(OmegahPetsc VERSION 0.1 LANGUAGES CXX CUDA)
+project(OmegahPetsc VERSION 0.1 LANGUAGES CXX)
 
 find_package(Omega_h REQUIRED)
 
@@ -16,7 +16,11 @@ list(APPEND ohFlags0Mod ${ohFlags1})
 set_property(TARGET Omega_h::omega_h PROPERTY
   INTERFACE_COMPILE_OPTIONS "${ohFlags0Mod}")
 
+option(OMEGAH_PETSC_USE_CUDA OFF)
 
 add_executable(ex12 ex12.cpp)
-set_source_files_properties(ex12.cpp PROPERTIES LANGUAGE CUDA)
+if(OMEGAH_PETSC_USE_CUDA)
+  enable_language(CUDA)
+  set_source_files_properties(ex12.cpp PROPERTIES LANGUAGE CUDA)
+endif()
 target_link_libraries(ex12 Omega_h::omega_h PkgConfig::PETSC)
