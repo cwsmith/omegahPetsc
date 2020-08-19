@@ -569,6 +569,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   }
 
   const int dim = mesh.dim();
+  assert(dim==2);
   const int numCells = mesh.nelems();
   const int numVertices = mesh.nverts();
   const int numCorners = 3;
