@@ -24,3 +24,7 @@ if(OMEGAH_PETSC_USE_CUDA)
   set_source_files_properties(ex12.cpp PROPERTIES LANGUAGE CUDA)
 endif()
 target_link_libraries(ex12 Omega_h::omega_h PkgConfig::PETSC)
+
+target_compile_options(ex12 PRIVATE
+  $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
+  -Wno-unused-parameter>)
