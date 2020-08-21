@@ -559,7 +559,8 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   auto mesh = Omega_h::Mesh(&lib);
   if (strcmp(options->mesh_type, "box") == 0)
   {
-    mesh = Omega_h::build_box(lib.world(), OMEGA_H_SIMPLEX, 1., 1., 0, 2, 2, 0);
+    mesh = Omega_h::build_box(lib.world(), OMEGA_H_SIMPLEX, 1., 1., 0, 
+        options->cells[0], options->cells[1], 0);
     Omega_h::vtk::write_parallel("box.vtk", &mesh);
   }
   else
@@ -642,7 +643,6 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     coords[idx*2] = recvIdsAndCoords[i*3+1];
     coords[idx*2+1] = recvIdsAndCoords[i*3+2];
   }
-  delete [] recvIdsAndCoords;
 
   int *global_cell = new int[cell.size()];
   for (int i = 0; i < cell.size(); i++)
@@ -700,6 +700,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     }
     MPI_Barrier(MPI_COMM_WORLD);
   }
+  delete [] recvIdsAndCoords; //delete after the debug prints
 
   PetscErrorCode ierr;
   PetscSF sfVert;
