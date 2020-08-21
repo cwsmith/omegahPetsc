@@ -31,7 +31,7 @@ Information on refinement:
 #include <vector>
 #include <set>
 #include <iostream>
-
+#include <unordered_set>
 
 typedef enum {NEUMANN, DIRICHLET, NONE} BCType;
 typedef enum {RUN_FULL, RUN_EXACT, RUN_TEST, RUN_PERF} RunType;
@@ -561,12 +561,16 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   if (strcmp(options->mesh_type, "box") == 0)
   {
     mesh = Omega_h::build_box(lib.world(), OMEGA_H_SIMPLEX, 1., 1., 0, 2, 2, 0);
+    Omega_h::vtk::write_parallel("ohBox", &mesh, 2); 
   }
   else
   {
     Omega_h::binary::read(options->mesh_type, lib.world(), &mesh, false);
     mesh.balance();
   }
+  int rank, commSize;
+  MPI_Comm_rank(comm, &rank);
+  MPI_Comm_size(comm, &commSize);
 
   const int dim = mesh.dim();
   assert(dim==2);
@@ -574,8 +578,6 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   const int numVertices = mesh.nverts();
   const int numCorners = 3;
 
-  int rank;
-  MPI_Comm_rank(comm, &rank);
   std::cerr << rank << " numCells: " << numCells << " numVertices: " << numVertices << "\n";
 
   // Get the coordinates of vertices
@@ -589,31 +591,44 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   Omega_h::Read<Omega_h::I32> vert_owned_rank = mesh.ask_owners(0).ranks;
   Omega_h::Read<Omega_h::LO> vert_owned_id = mesh.ask_owners(0).idxs;
 
-  Omega_h::Read<Omega_h::I8> exposed_edges = Omega_h::mark_exposed_sides(&mesh);
-  Omega_h::Read<Omega_h::LO> vert_to_edge = mesh.ask_verts_of(1);
-  std::vector<int> exposed_verts(numVertices, 0);
-  for (int i = 0; i < exposed_edges.size(); i++)
-  {
-    if (exposed_edges[i] == 1)
-    {
-      exposed_verts[vert_to_edge[2*i]] = 1;
-      exposed_verts[vert_to_edge[2*i+1]] = 1;
-    }
-    
-  }
-
   PetscErrorCode ierr;
   ierr = DMPlexCreateFromCellListPetsc(comm, dim, numCells, numVertices, numCorners, PETSC_FALSE, cell.data(), dim, vertexCoords.data(), dm);CHKERRQ(ierr);
 
-  PetscSF pointSF;
-  int numVerticesGhost = 0;
-  for (int i = 0; i < vert_owned_rank.size(); i++)
-  {
-    if (rank != vert_owned_rank[i] && exposed_verts[i] == 1)
-    {
+  int numVerticesGhost = 0; //vertices that are not owned
+  for (int i = 0; i < vert_owned_rank.size(); i++) {
+    if (rank != vert_owned_rank[i])
       numVerticesGhost++;
+  }
+
+  {
+    Omega_h::Dist d = mesh.ask_dist(0);
+    auto fRanks = d.items2ranks();
+    std::unordered_set<int> nborRanks;
+    for(int i=0; i<fRanks.size(); i++)
+      if( fRanks[i] != rank )
+        nborRanks.insert(fRanks[i]);
+    auto dinv = d.invert();
+    auto rRanks = dinv.items2ranks();
+    for(int i=0; i<rRanks.size(); i++)
+      if( rRanks[i] != rank )
+        nborRanks.insert(rRanks[i]);
+    for (int r = 0; r < commSize; r++) { //serialize over ranks for clean printing
+      if(rank == r) {
+        fprintf(stderr, "%d numVerts %d fRanks.size() %d : ", rank, mesh.nverts(), fRanks.size());
+        for(int i=0; i<fRanks.size(); i++)
+          fprintf(stderr, "%d ", fRanks[i]);
+        fprintf(stderr, "\n");
+        fprintf(stderr, "%d numGhosts %d rRanks.size() %d : ", rank, numVerticesGhost, rRanks.size());
+        for(int i=0; i<rRanks.size(); i++)
+          fprintf(stderr, "%d ", rRanks[i]);
+        fprintf(stderr, "\n");
+        fprintf(stderr, "%d numGhosts %d rRanks.size() %d : ", rank, numVerticesGhost, rRanks.size());
+        for(int i=0; i<nborRanks.size(); i++)
+      }
+      MPI_Barrier(MPI_COMM_WORLD);
     }
   }
+
   int *localVertex;
   PetscSFNode *remoteVertex;
   ierr = PetscMalloc1(numVerticesGhost, &localVertex);CHKERRQ(ierr);
@@ -629,28 +644,10 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     }
   }
   
+  PetscSF pointSF;
   ierr = DMGetPointSF(*dm, &pointSF);CHKERRQ(ierr);
   ierr = PetscSFSetGraph(pointSF, numCells+numVertices, numVerticesGhost, localVertex, PETSC_OWN_POINTER, remoteVertex, PETSC_OWN_POINTER);CHKERRQ(ierr);
 
-  // std::vector<int> pointsToRewrite;
-  // std::vector<int> targetOwners;
-  // for (int i = 0; i < vert_owned_rank.size(); i++)
-  // {
-  //   if (rank != vert_owned_rank.get(i))
-  //   {
-  //     pointsToRewrite.push_back(numCells+i);
-  //     targetOwners.push_back(vert_owned_rank.get(i));
-  //   }
-  // }
-  // const int *degrees;
-  // ierr = PetscSFComputeDegreeBegin(pointSF, &degrees);CHKERRQ(ierr);
-  // ierr = PetscSFComputeDegreeEnd(pointSF, &degrees);CHKERRQ(ierr);
-  // for (int i = 0; i < sizeof(degrees)/sizeof(degrees[0]); i++)
-  // {
-  //   printf("rank: %d, %d\n", rank, degrees[i]);
-  // }
-  // ierr = DMPlexRewriteSF(*dm, pointsToRewrite.size(), pointsToRewrite.data(), targetOwners.data(), degrees);CHKERRQ(ierr);
-  
   PetscSFView(pointSF, PETSC_VIEWER_STDOUT_WORLD);
 
   DM dm_int;
