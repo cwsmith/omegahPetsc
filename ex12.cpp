@@ -660,45 +660,47 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   //  global_cell[i] = temp[global_cell[i]];
   //}
 
-  for (int r = 0; r < commSize; r++)
-  { //serialize over ranks for clean printing
-    if(rank == r)
-    {
-      fprintf(stderr, "%d numLocalVerts %d ", rank, numLocalVerts);
-      for (int i = 0; i < numLocalVerts; i++) {
-        fprintf(stderr, "%ld:(%.2f,%.2f) ",
-            (Omega_h::GO) recvIdsAndCoords[i*3],
-            recvIdsAndCoords[i*3+1], recvIdsAndCoords[i*3+2]);
-      }
-      fprintf(stderr, "\n");
-      fprintf(stderr, "%d coords ", rank);
-      for (int i = 0; i < numLocalVerts; i++) {
-        fprintf(stderr, "(%.2f,%.2f) ", coords[i*2], coords[i*2+1]);
-      }
-      fprintf(stderr, "\n");
-      fprintf(stderr, "%d gid:destRank ", rank);
-      for (int i = 0; i < global_vertex.size(); i++)
-        fprintf(stderr, "%ld:%ld ", global_vertex[i], destRanks[i]);
-      fprintf(stderr, "\n");
-      for (int i = 0; i < vtxOwner.size(); i++)
+  if( options->debug  > 0 ) {
+    for (int r = 0; r < commSize; r++)
+    { //serialize over ranks for clean printing
+      if(rank == r)
       {
-        if(vtxOwner[i] == rank)
-        {
-          fprintf(stderr, "rank: %d, vtxGID %ld: %0.2f, %0.2f\n", rank,
-              global_vertex[i], vertexCoords[(i*2)], vertexCoords[(i*2)+1]);
+        fprintf(stderr, "%d numLocalVerts %d ", rank, numLocalVerts);
+        for (int i = 0; i < numLocalVerts; i++) {
+          fprintf(stderr, "%ld:(%.2f,%.2f) ",
+              (Omega_h::GO) recvIdsAndCoords[i*3],
+              recvIdsAndCoords[i*3+1], recvIdsAndCoords[i*3+2]);
         }
-      }
+        fprintf(stderr, "\n");
+        fprintf(stderr, "%d coords ", rank);
+        for (int i = 0; i < numLocalVerts; i++) {
+          fprintf(stderr, "(%.2f,%.2f) ", coords[i*2], coords[i*2+1]);
+        }
+        fprintf(stderr, "\n");
+        fprintf(stderr, "%d gid:destRank ", rank);
+        for (int i = 0; i < global_vertex.size(); i++)
+          fprintf(stderr, "%ld:%ld ", global_vertex[i], destRanks[i]);
+        fprintf(stderr, "\n");
+        for (int i = 0; i < vtxOwner.size(); i++)
+        {
+          if(vtxOwner[i] == rank)
+          {
+            fprintf(stderr, "rank: %d, vtxGID %ld: %0.2f, %0.2f\n", rank,
+                global_vertex[i], vertexCoords[(i*2)], vertexCoords[(i*2)+1]);
+          }
+        }
 
-      for (int i = 0; i < cell.size(); i+=3)
-      {
-        fprintf(stderr, "rank: %d, elmIdx %d: %d, %d, %d\n", rank,
-            i/3, global_cell[i], global_cell[i+1], global_cell[i+2]);
+        for (int i = 0; i < cell.size(); i+=3)
+        {
+          fprintf(stderr, "rank: %d, elmIdx %d: %d, %d, %d\n", rank,
+              i/3, global_cell[i], global_cell[i+1], global_cell[i+2]);
+        }
+        std::cerr << rank << " numCells: " << numCells << " numOwnedVertices: " << numOwnedVertices << "\n";
+        std::cerr << rank << " Min(GlobalVtxId): " << *std::min_element(global_cell, global_cell+cell.size())
+          << " Max(GlobalVtxId): " << *std::max_element(global_cell, global_cell+cell.size()) << "\n";
       }
-      std::cerr << rank << " numCells: " << numCells << " numOwnedVertices: " << numOwnedVertices << "\n";
-      std::cerr << rank << " Min(GlobalVtxId): " << *std::min_element(global_cell, global_cell+cell.size())
-                        << " Max(GlobalVtxId): " << *std::max_element(global_cell, global_cell+cell.size()) << "\n";
+      MPI_Barrier(MPI_COMM_WORLD);
     }
-    MPI_Barrier(MPI_COMM_WORLD);
   }
   delete [] recvIdsAndCoords; //delete after the debug prints
 
