@@ -521,38 +521,6 @@ static PetscErrorCode CreateBCLabel(DM dm, const char name[])
 
 static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
 {
-  /* 
-  Omega_h mesh representation
-   10---27---12----28---13
-    |       / |       / |
-    | 4    /  |  5   /  |
-   22    21  26    25   29
-    |   /  1  |   /   3 |
-    |  /      |  /      |
-    9---20---11----24---14
-    |       / |        /|
-    | 2   /   | 6    /  |
-   19   18   23    31   32
-    |  /   0  |   /   7 |
-    | /       |  /      |
-    8---17---15----30---16 
-
-  PETSc mesh representation
-   10---27---12----29---13
-    |       / |       / |
-    | 4    /  |  5   /  |
-   28    22  21    26   25
-    |   /  1  |   /   3 |
-    |  /      |  /      |
-    9---20---11----24---14
-    |       / |        /|
-    | 2   /   | 6    /  |
-   23   19   18    30   32
-    |  /   0  |   /   7 |
-    | /       |  /      |
-    8---17---15----31---16
-  */
-
   assert(options->dim == 2);
 
   auto lib = Omega_h::Library();
@@ -649,16 +617,6 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   {
     global_cell[i] = global_vertex[cell[i]];
   }
-
-  //=====
-  //uncomment the following loop to force rank 0 to have
-  //non-sequential global vertex numbering
-  //=====
-  //std::vector<int> temp = {0, 1, 2, 8, 3, 4, 5, 7, 6};
-  //for (int i = 0; i < cell.size(); i++)
-  //{
-  //  global_cell[i] = temp[global_cell[i]];
-  //}
 
   if( options->debug  > 0 ) {
     for (int r = 0; r < commSize; r++)
