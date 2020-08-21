@@ -72,9 +72,11 @@ mpiTest(24kxgc 4 ./ex12
 mpiTest(box 2 ./ex12
   -mesh box
   -vec_view vtk:box_p2_sol.vtu:vtk_vtu
+  -cells 3,3,0
   ${petscArgs})
 
 mpiTest(box 4 ./ex12
   -mesh box
   -vec_view vtk:box_p4_sol.vtu:vtk_vtu
+  -cells 4,4,0
   ${petscArgs})
