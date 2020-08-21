@@ -65,7 +65,7 @@ typedef struct {
   PC             pcmg;              /* This is needed for error monitoring */
   PetscBool      checkksp;          /* Whether to check the KSPSolve for runType == RUN_TEST */
 
-  char           mesh_type[4] = "box";
+  char           mesh_type[512] = "box";
 } AppCtx;
 
 static PetscErrorCode zero(PetscInt dim, PetscReal time, const PetscReal x[], PetscInt Nc, PetscScalar *u, void *ctx)
