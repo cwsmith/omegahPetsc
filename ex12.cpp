@@ -1,4 +1,4 @@
-tatic char help[] = "Poisson Problem in 2d and 3d with simplicial finite elements.\n\
+static char help[] = "Poisson Problem in 2d and 3d with simplicial finite elements.\n\
 We solve the Poisson problem in a rectangular\n\
 domain, using a parallel unstructured mesh (DMPLEX) to discretize it.\n\
 This example supports discretized auxiliary fields (conductivity) as well as\n\
@@ -535,11 +535,6 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   {
     Omega_h::binary::read(options->mesh_type, lib.world(), &mesh, false);
     mesh.balance();
-  }
-  else
-  {
-    std::cerr << "Select box or xgc for -mesh\n";
-    exit (EXIT_FAILURE);
   }
 
   int rank, commSize;
@@ -1184,6 +1179,7 @@ int main(int argc, char **argv)
   PetscErrorCode ierr;
 
   ierr = PetscInitialize(&argc, &argv, NULL,help);if (ierr) return ierr;
+  
   PetscLogStage stagenum0;
   PetscLogStageRegister("Mesh creation", &stagenum0);
   PetscLogStagePush(stagenum0);
