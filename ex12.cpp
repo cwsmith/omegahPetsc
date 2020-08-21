@@ -562,27 +562,23 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     mesh = Omega_h::build_box(lib.world(), OMEGA_H_SIMPLEX, 1., 1., 0, 2, 2, 0);
     Omega_h::vtk::write_parallel("box.vtk", &mesh);
   }
-  else if (strcmp(options->mesh_type, "xgc") == 0)
-  {
-    Omega_h::binary::read("24k.osh", lib.world(), &mesh, false);
-    mesh.balance();
-  }
   else
   {
-    std::cerr << "Select box or xgc for -mesh\n";
-    exit (EXIT_FAILURE);
+    Omega_h::binary::read(options->mesh_type, lib.world(), &mesh, false);
+    mesh.balance();
   }
 
-  int rank, size;
+  int rank, commSize;
   MPI_Comm_rank(comm, &rank);
-  MPI_Comm_size(comm, &size);
+  MPI_Comm_size(comm, &commSize);
 
   const int dim = mesh.dim();
+  assert(dim==2);
   const int numCells = mesh.nelems();
   const int numCorners = 3;
 
-  Omega_h::Read<Omega_h::LO> vertex_owned = mesh.ask_owners(0).ranks;
-  int numOwnedVertices = std::count(vertex_owned.data(), vertex_owned.data()+vertex_owned.size(), rank);
+  Omega_h::Read<Omega_h::LO> vtxOwner = mesh.ask_owners(0).ranks;
+  int numOwnedVertices = std::count(vtxOwner.data(), vtxOwner.data()+vtxOwner.size(), rank);
 
   // Get the vertices of each cell
   Omega_h::Read<Omega_h::LO> cell(mesh.ask_elem_verts());
@@ -591,7 +587,62 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   // Get the coordinates of vertices
   Omega_h::Read<Omega_h::Real> vertexCoords = mesh.coords();
 
+  // create the linear uniform partition of vertex coordinates
+  // based on global vertex id
+  auto numGlobVerts = mesh.nglobal_ents(0);
+  int vertsPerRank = numGlobVerts/commSize;
+  int remainingVerts = numGlobVerts % commSize;
+  int numLocalVerts = vertsPerRank;
+  if( rank == commSize-1 )
+    numLocalVerts += remainingVerts;
+
   Omega_h::Read<Omega_h::GO> global_vertex = mesh.globals(0);
+
+  MPI_Request* recvReqs = (MPI_Request*) malloc(sizeof(MPI_Request)*numLocalVerts);
+  double* recvIdsAndCoords = new double[numLocalVerts*3];
+  for (int i = 0; i < numLocalVerts; i++) {
+    MPI_Irecv(&recvIdsAndCoords[i*3], 3, MPI_DOUBLE,
+        MPI_ANY_SOURCE, MPI_ANY_TAG, comm, &recvReqs[i]);
+  }
+
+  Omega_h::Write<Omega_h::GO> destRanks(global_vertex.size()); //don't need to store this
+  double* sendIdsAndCoords = new double[numOwnedVertices*3];
+  MPI_Request* sendReqs = (MPI_Request*) malloc(sizeof(MPI_Request)*numOwnedVertices);
+  int msgCnt = 0;
+  for (int i = 0; i < global_vertex.size(); i++) {
+    const auto gid = global_vertex[i];
+    destRanks[i] = gid/vertsPerRank;
+    if( gid >= (vertsPerRank*commSize-1) )
+      destRanks[i] = commSize-1; //last rank gets the remainder
+    if( vtxOwner[i] == rank ) {
+      sendIdsAndCoords[msgCnt*3] = static_cast<double>(gid);
+      sendIdsAndCoords[msgCnt*3+1] = vertexCoords[i*2];
+      sendIdsAndCoords[msgCnt*3+2] = vertexCoords[i*2+1];
+      int tag = 0;
+      MPI_Isend(&sendIdsAndCoords[msgCnt*3],3,MPI_DOUBLE,destRanks[i],
+          tag,comm,&sendReqs[msgCnt]);
+      msgCnt++;
+    }
+  }
+  assert(msgCnt == numOwnedVertices);
+
+  int mpiErr;
+  mpiErr = MPI_Waitall(numLocalVerts,recvReqs,MPI_STATUSES_IGNORE); assert(mpiErr == MPI_SUCCESS);
+  mpiErr = MPI_Waitall(numOwnedVertices,sendReqs,MPI_STATUSES_IGNORE); assert(mpiErr == MPI_SUCCESS);
+  free(recvReqs);
+  free(sendReqs);
+  delete [] sendIdsAndCoords;
+
+  double *coords = new double[numLocalVerts*2];
+  Omega_h::GO rankStartId = rank*numLocalVerts;
+  if(rank == commSize-1)
+    rankStartId = rank*(numLocalVerts-remainingVerts);
+  for (int i = 0; i < numLocalVerts; i++) {
+    const int idx = static_cast<Omega_h::GO>(recvIdsAndCoords[i*3]) - rankStartId;
+    coords[idx*2] = recvIdsAndCoords[i*3+1];
+    coords[idx*2+1] = recvIdsAndCoords[i*3+2];
+  }
+  delete [] recvIdsAndCoords;
 
   int *global_cell = new int[cell.size()];
   for (int i = 0; i < cell.size(); i++)
@@ -609,26 +660,42 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   //  global_cell[i] = temp[global_cell[i]];
   //}
 
-  for (int r = 0; r < size; r++)
+  for (int r = 0; r < commSize; r++)
   { //serialize over ranks for clean printing
     if(rank == r)
     {
-      for (int i = 0; i < vertex_owned.size(); i++)
+      fprintf(stderr, "%d numLocalVerts %d ", rank, numLocalVerts);
+      for (int i = 0; i < numLocalVerts; i++) {
+        fprintf(stderr, "%ld:(%.2f,%.2f) ",
+            (Omega_h::GO) recvIdsAndCoords[i*3],
+            recvIdsAndCoords[i*3+1], recvIdsAndCoords[i*3+2]);
+      }
+      fprintf(stderr, "\n");
+      fprintf(stderr, "%d coords ", rank);
+      for (int i = 0; i < numLocalVerts; i++) {
+        fprintf(stderr, "(%.2f,%.2f) ", coords[i*2], coords[i*2+1]);
+      }
+      fprintf(stderr, "\n");
+      fprintf(stderr, "%d gid:destRank ", rank);
+      for (int i = 0; i < global_vertex.size(); i++)
+        fprintf(stderr, "%ld:%ld ", global_vertex[i], destRanks[i]);
+      fprintf(stderr, "\n");
+      for (int i = 0; i < vtxOwner.size(); i++)
       {
-        if(vertex_owned[i] == rank)
+        if(vtxOwner[i] == rank)
         {
           fprintf(stderr, "rank: %d, vtxGID %ld: %0.2f, %0.2f\n", rank,
               global_vertex[i], vertexCoords[(i*2)], vertexCoords[(i*2)+1]);
         }
       }
-      
+
       for (int i = 0; i < cell.size(); i+=3)
       {
         fprintf(stderr, "rank: %d, elmIdx %d: %d, %d, %d\n", rank,
             i/3, global_cell[i], global_cell[i+1], global_cell[i+2]);
       }
       std::cerr << rank << " numCells: " << numCells << " numOwnedVertices: " << numOwnedVertices << "\n";
-      std::cerr << rank << " Min(GlobalVtxId): " << *std::min_element(global_cell, global_cell+cell.size()) 
+      std::cerr << rank << " Min(GlobalVtxId): " << *std::min_element(global_cell, global_cell+cell.size())
                         << " Max(GlobalVtxId): " << *std::max_element(global_cell, global_cell+cell.size()) << "\n";
     }
     MPI_Barrier(MPI_COMM_WORLD);
@@ -636,20 +703,12 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
 
   PetscErrorCode ierr;
   PetscSF sfVert;
-  ierr = DMCreate(comm, dm);CHKERRQ(ierr);
-  ierr = DMSetType(*dm, DMPLEX);CHKERRQ(ierr);
-  ierr = DMSetDimension(*dm, dim);CHKERRQ(ierr);
-  ierr = DMPlexBuildFromCellListParallel(*dm, numCells, numOwnedVertices, numCorners, global_cell, &sfVert);CHKERRQ(ierr);
-  MPI_Barrier(MPI_COMM_WORLD);
-  PetscSFView(sfVert, PETSC_VIEWER_STDOUT_WORLD);
-  DM dm_int;
-  ierr = DMPlexInterpolate(*dm, &dm_int);
-  ierr = DMDestroy(dm);CHKERRQ(ierr);
-  *dm  = dm_int;
+  PetscBool interpolate = PETSC_TRUE;
+  ierr = DMPlexCreateFromCellListParallelPetsc(comm, dim,
+      numCells, numLocalVerts, numGlobVerts,
+      numCorners, interpolate, global_cell, dim, coords, &sfVert, dm);CHKERRQ(ierr);
+  delete [] coords;
   delete [] global_cell;
-  fprintf(stderr, "%d exiting\n", rank);
-  MPI_Barrier(MPI_COMM_WORLD);
-   exit (EXIT_FAILURE);
 
   // Get the starting and ending index for the topology
   PetscInt cStart, cEnd, vStart, vEnd, eStart, eEnd;
@@ -736,9 +795,7 @@ static PetscErrorCode CreateMesh(MPI_Comm comm, AppCtx *user, DM *dm)
     ierr = DMPlexSetRefinementUniform(*dm, PETSC_FALSE);CHKERRQ(ierr);
   }
   {
-    PetscPartitioner part;
     DM               refinedMesh     = NULL;
-    DM               distributedMesh = NULL;
 
     /* Refine mesh using a volume constraint */
     if (refinementLimit > 0.0) {
@@ -754,6 +811,8 @@ static PetscErrorCode CreateMesh(MPI_Comm comm, AppCtx *user, DM *dm)
       }
     }
     /* Distribute mesh over processes */
+    //PetscPartitioner part;
+    //DM               distributedMesh = NULL;
     // ierr = DMPlexGetPartitioner(*dm,&part);CHKERRQ(ierr);
     // ierr = PetscPartitionerSetFromOptions(part);CHKERRQ(ierr);
     // ierr = DMPlexDistribute(*dm, 0, NULL, &distributedMesh);CHKERRQ(ierr);
