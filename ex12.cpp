@@ -63,7 +63,7 @@ typedef struct {
   PC             pcmg;              /* This is needed for error monitoring */
   PetscBool      checkksp;          /* Whether to check the KSPSolve for runType == RUN_TEST */
 
-  char           mesh_type[4] = "box";
+  char           mesh_type[512] = "box";
 } AppCtx;
 
 static PetscErrorCode zero(PetscInt dim, PetscReal time, const PetscReal x[], PetscInt Nc, PetscScalar *u, void *ctx)
@@ -519,55 +519,19 @@ static PetscErrorCode CreateBCLabel(DM dm, const char name[])
 
 static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
 {
-  /* 
-  Omega_h mesh representation
-   10---27---12----28---13
-    |       / |       / |
-    | 4    /  |  5   /  |
-   22    21  26    25   29
-    |   /  1  |   /   3 |
-    |  /      |  /      |
-    9---20---11----24---14
-    |       / |        /|
-    | 2   /   | 6    /  |
-   19   18   23    31   32
-    |  /   0  |   /   7 |
-    | /       |  /      |
-    8---17---15----30---16 
-
-  PETSc mesh representation
-   10---27---12----29---13
-    |       / |       / |
-    | 4    /  |  5   /  |
-   28    22  21    26   25
-    |   /  1  |   /   3 |
-    |  /      |  /      |
-    9---20---11----24---14
-    |       / |        /|
-    | 2   /   | 6    /  |
-   23   19   18    30   32
-    |  /   0  |   /   7 |
-    | /       |  /      |
-    8---17---15----31---16
-  */
-
   assert(options->dim == 2);
 
   auto lib = Omega_h::Library();
   auto mesh = Omega_h::Mesh(&lib);
   if (strcmp(options->mesh_type, "box") == 0)
   {
-    mesh = Omega_h::build_box(lib.world(), OMEGA_H_SIMPLEX, 1., 1., 0, 2, 2, 0);
-  }
-  else if (strcmp(options->mesh_type, "xgc") == 0)
-  {
-    Omega_h::binary::read("24k.osh", lib.world(), &mesh, false);
-    mesh.balance();
+    // Since the box mesh is already partitioned by Omega_h, this mesh would not work with Parmetis.
+    mesh = Omega_h::build_box(lib.world(), OMEGA_H_SIMPLEX, 1., 1., 0, options->cells[0], options->cells[1], options->cells[2]);
+    exit(EXIT_FAILURE);
   }
   else
   {
-    std::cerr << "Select box or xgc for -mesh\n";
-    exit (EXIT_FAILURE);
+    Omega_h::binary::read(options->mesh_type, lib.world(), &mesh, false);
   }
 
   const int dim = mesh.dim();
@@ -575,20 +539,15 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   const int numVertices = mesh.nverts();
   const int numCorners = 3;
 
-  int rank;
-  MPI_Comm_rank(comm, &rank);
-  std::cerr << rank << " numCells: " << numCells << " numVertices: " << numVertices << "\n";
-
-  // Get the coordinates of vertices
   Omega_h::HostRead<Omega_h::Real> vertexCoords(mesh.coords());
   assert(vertexCoords.size() == dim*numVertices);
 
-  // Get the vertices of each cell
+  // Get the vertices to cell adjacency
   Omega_h::HostRead<Omega_h::LO> cell(mesh.ask_elem_verts());
   assert(cell.size() == numCorners*numCells);
   
   PetscErrorCode ierr;
-  ierr = DMPlexCreateFromCellList(comm, dim, numCells, numVertices, numCorners, PETSC_TRUE, cell.data(), dim, vertexCoords.data(), dm);CHKERRQ(ierr);
+  ierr = DMPlexCreateFromCellListPetsc(comm, dim, numCells, numVertices, numCorners, PETSC_TRUE, cell.data(), dim, vertexCoords.data(), dm);CHKERRQ(ierr);
 
   // Get the starting and ending index for the topology
   PetscInt cStart, cEnd, vStart, vEnd, eStart, eEnd;
@@ -693,13 +652,24 @@ static PetscErrorCode CreateMesh(MPI_Comm comm, AppCtx *user, DM *dm)
       }
     }
     /* Distribute mesh over processes */
-    // ierr = DMPlexGetPartitioner(*dm,&part);CHKERRQ(ierr);
-    // ierr = PetscPartitionerSetFromOptions(part);CHKERRQ(ierr);
-    // ierr = DMPlexDistribute(*dm, 0, NULL, &distributedMesh);CHKERRQ(ierr);
-    // if (distributedMesh) {
-    //   ierr = DMDestroy(dm);CHKERRQ(ierr);
-    //   *dm  = distributedMesh;
-    // }
+    ierr = DMPlexGetPartitioner(*dm,&part);CHKERRQ(ierr);
+    ierr = PetscPartitionerSetFromOptions(part);CHKERRQ(ierr);
+    ierr = DMPlexDistribute(*dm, 0, NULL, &distributedMesh);CHKERRQ(ierr);
+    if (distributedMesh) {
+      ierr = DMDestroy(dm);CHKERRQ(ierr);
+      *dm  = distributedMesh;
+    }
+
+    int rank;
+    MPI_Comm_rank(comm, &rank);
+
+    // Get the starting and ending index for the topology
+    PetscInt cStart, cEnd, vStart, vEnd, eStart, eEnd;
+    ierr = DMPlexGetHeightStratum(*dm, 0, &cStart, &cEnd); /* cells */ 
+    ierr = DMPlexGetHeightStratum(*dm, 1, &eStart, &eEnd); /* edges */ 
+    ierr = DMPlexGetHeightStratum(*dm, 2, &vStart, &vEnd); /* vertices */
+
+    printf("rank: %d, numCells: %d, numVertices: %d\n", rank, cEnd-cStart, vEnd-vStart);
   }
   if (interpolate) {
     if (user->bcType == NEUMANN) {
@@ -851,9 +821,9 @@ static PetscErrorCode SetupProblem(DM dm, AppCtx *user)
     SETERRQ1(PETSC_COMM_WORLD, PETSC_ERR_ARG_OUTOFRANGE, "Invalid dimension %d", user->dim);
   }
   if (user->bcType != NONE) {
-    ierr = PetscDSAddBoundary(prob, user->bcType == DIRICHLET ? (user->fieldBC ? DM_BC_ESSENTIAL_FIELD : DM_BC_ESSENTIAL) : DM_BC_NATURAL,
-                              "wall", user->bcType == DIRICHLET ? "marker" : "boundary", 0, 0, NULL,
-                              user->fieldBC ? (void (*)(void)) user->exactFields[0] : (void (*)(void)) user->exactFuncs[0], 1, &id, user);CHKERRQ(ierr);
+    ierr = DMAddBoundary(dm, user->bcType == DIRICHLET ? (user->fieldBC ? DM_BC_ESSENTIAL_FIELD : DM_BC_ESSENTIAL) : DM_BC_NATURAL,
+                         "wall", user->bcType == DIRICHLET ? "marker" : "boundary", 0, 0, NULL,
+                         user->fieldBC ? (void (*)(void)) user->exactFields[0] : (void (*)(void)) user->exactFuncs[0], NULL, 1, &id, user);CHKERRQ(ierr);
   }
   ierr = PetscDSSetExactSolution(prob, 0, user->exactFuncs[0], user);CHKERRQ(ierr);
   PetscFunctionReturn(0);
