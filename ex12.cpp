@@ -520,131 +520,70 @@ static PetscErrorCode CreateBCLabel(DM dm, const char name[])
 
 static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
 {
-  /* 
-  Omega_h mesh representation
-   10---27---12----28---13
-    |       / |       / |
-    | 4    /  |  5   /  |
-   22    21  26    25   29
-    |   /  1  |   /   3 |
-    |  /      |  /      |
-    9---20---11----24---14
-    |       / |        /|
-    | 2   /   | 6    /  |
-   19   18   23    31   32
-    |  /   0  |   /   7 |
-    | /       |  /      |
-    8---17---15----30---16 
-
-  PETSc mesh representation
-   10---27---12----29---13
-    |       / |       / |
-    | 4    /  |  5   /  |
-   28    22  21    26   25
-    |   /  1  |   /   3 |
-    |  /      |  /      |
-    9---20---11----24---14
-    |       / |        /|
-    | 2   /   | 6    /  |
-   23   19   18    30   32
-    |  /   0  |   /   7 |
-    | /       |  /      |
-    8---17---15----31---16
-  */
-
   assert(options->dim == 2);
 
-  PetscErrorCode ierr;
   auto lib = Omega_h::Library();
   auto mesh = Omega_h::Mesh(&lib);
-  // auto omega_comm = Omega_h::CommPtr(new Omega_h::Comm(&lib, comm));
 
   int rank;
   MPI_Comm_rank(comm, &rank);
 
-  int dim;
-  int numCells;
-  int numVertices;
-  int numCorners = 3;
-
-  // Use box mesh
   if (strcmp(options->mesh_type, "box") == 0)
   {
-    mesh = Omega_h::build_box(lib.world(), OMEGA_H_SIMPLEX, 1., 1., 0, 2, 2, 0);
-
-    dim = mesh.dim();
-    numCells = mesh.nelems();
-    numVertices = mesh.nverts();
-
-    // Get the coordinates of vertices
-    Omega_h::HostRead<Omega_h::Real> vertexCoords(mesh.coords());
-    assert(vertexCoords.size() == dim*numVertices);
-
-    // Get the vertices of each cell
-    Omega_h::HostRead<Omega_h::LO> cell(mesh.ask_elem_verts());
-    assert(cell.size() == numCorners*numCells);
-    
-    ierr = DMPlexCreateFromCellList(comm, dim, numCells, numVertices, numCorners, PETSC_TRUE, cell.data(), dim, vertexCoords.data(), dm);CHKERRQ(ierr);
+    mesh = Omega_h::build_box(lib.world(), OMEGA_H_SIMPLEX, 1., 1., 0, options->cells[0], options->cells[1], options->cells[2]);
   }
-  else if (strcmp(options->mesh_type, "xgc") == 0)
+  else
   {
     Omega_h::filesystem::path file_path = "/gpfs/u/home/MPFS/MPFSzhqg/barn-shared/cws/xgc-picparts/24k/4p/picpart";
     file_path += std::to_string(rank);
     file_path += ".osh";
     Omega_h::binary::read(file_path, lib.self(), &mesh);
-
-    Omega_h::HostRead<Omega_h::LO> ownership_elements(mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership"));
-    Omega_h::HostRead<Omega_h::LO> ownership_vert(mesh.get_array<Omega_h::LO>(0, "ownership"));
-
-    dim = mesh.dim();
-    numVertices = std::count(ownership_vert.data(), ownership_vert.data()+ownership_vert.size(), rank);
-    numCells = std::count(ownership_elements.data(), ownership_elements.data()+ownership_elements.size(), rank);
-
-    // Get the coordinates of vertices
-    Omega_h::HostRead<Omega_h::Real> vertexCoords(mesh.coords());
-
-    // Get the vertices of each cell
-    Omega_h::HostRead<Omega_h::LO> cell(mesh.ask_elem_verts());
-
-    std::vector<int> core_cell;
-    for (int i = 0; i < ownership_elements.size(); i++)
-    {
-      if (ownership_elements.data()[i] == rank)
-      {
-        core_cell.push_back(cell[3*i]);
-        core_cell.push_back(cell[3*i+1]);
-        core_cell.push_back(cell[3*i+2]);
-      }
-      
-    }
-
-    assert(core_cell.size() == numCorners*numCells);
-    min_vert_id = *std::min_element(core_cell.begin(), core_cell.end());
-
-    std::vector<double> core_coord(dim*numVertices);
-    for (int i = 0; i < core_cell.size(); i++)
-    {
-      if (core_coord[2*i] == NULL && core_coord[2*i+1] == NULL)
-      {
-        core_coord.push_back(vertexCoords[2*i]);
-        core_coord.push_back(vertexCoords[2*i+1]);
-      }
-
-    }
-
-    // for_each(boundary_edge.begin(), boundary_edge.end(), [&numCells, &numVertices](int &n){ n=n+numCells+numVertices; });
-
-    ierr = DMPlexCreateFromCellList(comm, dim, numCells, numVertices, numCorners, PETSC_TRUE, &core_cell[0], dim, &core_coord[0], dm);CHKERRQ(ierr);
-
-    // mesh.balance();
   }
-  else
+
+  const int dim = mesh.dim();
+  const int numCorners = 3;
+
+  Omega_h::HostRead<Omega_h::LO> ownership_elements(mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership"));
+  Omega_h::HostRead<Omega_h::LO> ownership_vert(mesh.get_array<Omega_h::LO>(0, "ownership"));
+
+  int numVertices = std::count(ownership_vert.data(), ownership_vert.data()+ownership_vert.size(), rank);
+  int numCells = std::count(ownership_elements.data(), ownership_elements.data()+ownership_elements.size(), rank);
+
+  // Get the vertices to cell adjacency
+  Omega_h::Read<Omega_h::LO> cell = mesh.ask_elem_verts();
+  assert(cell.size() == numCorners*numCells);
+
+  Omega_h::Read<Omega_h::Real> vertexCoords = mesh.coords();
+
+  std::vector<int> core_cell;
+  for (int i = 0; i < ownership_elements.size(); i++)
   {
-    std::cerr << "Select box or xgc for -mesh\n";
-    exit (EXIT_FAILURE);
+    if (ownership_elements.data()[i] == rank)
+    {
+      core_cell.push_back(cell[3*i]);
+      core_cell.push_back(cell[3*i+1]);
+      core_cell.push_back(cell[3*i+2]);
+    }
+    
   }
 
-  std::cerr << rank << " numCells: " << numCells << " numVertices: " << numVertices << "\n";
+  assert(core_cell.size() == numCorners*numCells);
+
+  std::vector<double> core_coord(dim*numVertices);
+  for (int i = 0; i < core_cell.size(); i++)
+  {
+    if (core_coord[2*i] == NULL && core_coord[2*i+1] == NULL)
+    {
+      core_coord.push_back(vertexCoords[2*i]);
+      core_coord.push_back(vertexCoords[2*i+1]);
+    }
+
+  }
+
+  PetscErrorCode ierr;
+  ierr = DMPlexCreateFromCellListPetsc(comm, dim, numCells, numVertices, numCorners, PETSC_TRUE, &core_cell[0], dim, &core_coord[0], dm);CHKERRQ(ierr);
+
+  printf("rank: %d, numCells: %d, numVertices: %d\n", rank, numCells, numVertices);
 
   // Get the starting and ending index for the topology
   PetscInt cStart, cEnd, vStart, vEnd, eStart, eEnd;
@@ -907,9 +846,9 @@ static PetscErrorCode SetupProblem(DM dm, AppCtx *user)
     SETERRQ1(PETSC_COMM_WORLD, PETSC_ERR_ARG_OUTOFRANGE, "Invalid dimension %d", user->dim);
   }
   if (user->bcType != NONE) {
-    ierr = PetscDSAddBoundary(prob, user->bcType == DIRICHLET ? (user->fieldBC ? DM_BC_ESSENTIAL_FIELD : DM_BC_ESSENTIAL) : DM_BC_NATURAL,
-                              "wall", user->bcType == DIRICHLET ? "marker" : "boundary", 0, 0, NULL,
-                              user->fieldBC ? (void (*)(void)) user->exactFields[0] : (void (*)(void)) user->exactFuncs[0], 1, &id, user);CHKERRQ(ierr);
+    ierr = DMAddBoundary(dm, user->bcType == DIRICHLET ? (user->fieldBC ? DM_BC_ESSENTIAL_FIELD : DM_BC_ESSENTIAL) : DM_BC_NATURAL,
+                         "wall", user->bcType == DIRICHLET ? "marker" : "boundary", 0, 0, NULL,
+                         user->fieldBC ? (void (*)(void)) user->exactFields[0] : (void (*)(void)) user->exactFuncs[0], NULL, 1, &id, user);CHKERRQ(ierr);
   }
   ierr = PetscDSSetExactSolution(prob, 0, user->exactFuncs[0], user);CHKERRQ(ierr);
   PetscFunctionReturn(0);
