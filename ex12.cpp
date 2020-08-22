@@ -521,15 +521,12 @@ static PetscErrorCode CreateBCLabel(DM dm, const char name[])
 
 static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
 {
-  assert(options->dim == 2);
-
   auto lib = Omega_h::Library();
   auto mesh = Omega_h::Mesh(&lib);
   if (strcmp(options->mesh_type, "box") == 0)
   {
     mesh = Omega_h::build_box(lib.world(), OMEGA_H_SIMPLEX, 1., 1., 0, 
-        options->cells[0], options->cells[1], 0);
-    Omega_h::vtk::write_parallel("box.vtk", &mesh);
+        options->cells[0], options->cells[1], options->cells[2]);
   }
   else
   {
@@ -549,16 +546,15 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   Omega_h::Read<Omega_h::LO> vtxOwner = mesh.ask_owners(0).ranks;
   int numOwnedVertices = std::count(vtxOwner.data(), vtxOwner.data()+vtxOwner.size(), rank);
 
-  // Get the vertices of each cell
-  Omega_h::Read<Omega_h::LO> cell(mesh.ask_elem_verts());
+  // Get the vertices to cell adjacency
+  Omega_h::Read<Omega_h::LO> cell = mesh.ask_elem_verts();
   assert(cell.size() == numCorners*numCells);
 
-  // Get the coordinates of vertices
   Omega_h::Read<Omega_h::Real> vertexCoords = mesh.coords();
 
   // create the linear uniform partition of vertex coordinates
   // based on global vertex id
-  auto numGlobVerts = mesh.nglobal_ents(0);
+  Omega_h::GO numGlobVerts = mesh.nglobal_ents(0);
   int vertsPerRank = numGlobVerts/commSize;
   int remainingVerts = numGlobVerts % commSize;
   int numLocalVerts = vertsPerRank;
@@ -612,13 +608,14 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     coords[idx*2+1] = recvIdsAndCoords[i*3+2];
   }
 
+  // Change the local to global vertex id for adjacency
   int *global_cell = new int[cell.size()];
   for (int i = 0; i < cell.size(); i++)
   {
     global_cell[i] = global_vertex[cell[i]];
   }
 
-  if( options->debug  > 0 ) {
+  if(options->debug > 0) {
     for (int r = 0; r < commSize; r++)
     { //serialize over ranks for clean printing
       if(rank == r)
@@ -653,9 +650,10 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
           fprintf(stderr, "rank: %d, elmIdx %d: %d, %d, %d\n", rank,
               i/3, global_cell[i], global_cell[i+1], global_cell[i+2]);
         }
-        std::cerr << rank << " numCells: " << numCells << " numOwnedVertices: " << numOwnedVertices << "\n";
-        std::cerr << rank << " Min(GlobalVtxId): " << *std::min_element(global_cell, global_cell+cell.size())
-          << " Max(GlobalVtxId): " << *std::max_element(global_cell, global_cell+cell.size()) << "\n";
+        fprintf(stderr, "rank: %d, numCells: %d, numOwnedVertices: %d\n", rank, numCells, numOwnedVertices);
+        fprintf(stderr, "rank: %d, Min(GlobalVtxId): %d, Max(GlobalVtxId): %d\n", rank, 
+                *std::min_element(global_cell, global_cell+cell.size()), 
+                *std::max_element(global_cell, global_cell+cell.size()));
       }
       MPI_Barrier(MPI_COMM_WORLD);
     }
