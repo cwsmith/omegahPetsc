@@ -525,12 +525,14 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   auto lib = Omega_h::Library();
   auto mesh = Omega_h::Mesh(&lib);
 
-  int rank;
+  int rank, commSize;
   MPI_Comm_rank(comm, &rank);
+  MPI_Comm_size(comm, &commSize);
 
   if (strcmp(options->mesh_type, "box") == 0)
   {
-    mesh = Omega_h::build_box(lib.world(), OMEGA_H_SIMPLEX, 1., 1., 0, options->cells[0], options->cells[1], options->cells[2]);
+    mesh = Omega_h::build_box(lib.world(), OMEGA_H_SIMPLEX, 1., 1., 0, 
+            options->cells[0], options->cells[1], options->cells[2]);
   }
   else
   {
@@ -543,22 +545,21 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   const int dim = mesh.dim();
   const int numCorners = 3;
 
-  Omega_h::HostRead<Omega_h::LO> ownership_elements(mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership"));
-  Omega_h::HostRead<Omega_h::LO> ownership_vert(mesh.get_array<Omega_h::LO>(0, "ownership"));
+  Omega_h::Read<Omega_h::LO> ownership_elem = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
+  Omega_h::Read<Omega_h::LO> ownership_vert = mesh.get_array<Omega_h::LO>(0, "ownership");
 
-  int numVertices = std::count(ownership_vert.data(), ownership_vert.data()+ownership_vert.size(), rank);
-  int numCells = std::count(ownership_elements.data(), ownership_elements.data()+ownership_elements.size(), rank);
+  int numOwnedVertices = std::count(ownership_vert.data(), ownership_vert.data()+ownership_vert.size(), rank);
+  int numCells = std::count(ownership_elem.data(), ownership_elem.data()+ownership_elem.size(), rank);
 
   // Get the vertices to cell adjacency
   Omega_h::Read<Omega_h::LO> cell = mesh.ask_elem_verts();
-  assert(cell.size() == numCorners*numCells);
 
   Omega_h::Read<Omega_h::Real> vertexCoords = mesh.coords();
 
   std::vector<int> core_cell;
-  for (int i = 0; i < ownership_elements.size(); i++)
+  for (int i = 0; i < ownership_elem.size(); i++)
   {
-    if (ownership_elements.data()[i] == rank)
+    if (ownership_elem[i] == rank)
     {
       core_cell.push_back(cell[3*i]);
       core_cell.push_back(cell[3*i+1]);
@@ -566,24 +567,91 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     }
     
   }
-
   assert(core_cell.size() == numCorners*numCells);
 
-  std::vector<double> core_coord(dim*numVertices);
-  for (int i = 0; i < core_cell.size(); i++)
+  std::vector<double> core_coord;
+  for (int i = 0; i < ownership_vert.size(); i++)
   {
-    if (core_coord[2*i] == NULL && core_coord[2*i+1] == NULL)
+    if (ownership_vert[i] == rank)
     {
       core_coord.push_back(vertexCoords[2*i]);
       core_coord.push_back(vertexCoords[2*i+1]);
     }
 
   }
+  assert(core_coord.size() == dim*numOwnedVertices);
+
+  Omega_h::Read<Omega_h::GO> global_vertex = mesh.globals(0);
+  // Change the local to global vertex id for adjacency
+  for (unsigned int i = 0; i < core_cell.size(); i++)
+  {
+    core_cell[i] = global_vertex[core_cell[i]];
+  }
+
+  // create the linear uniform partition of vertex coordinates
+  // based on global vertex id
+  int numGlobalVerts;
+  MPI_Allreduce(&numOwnedVertices, &numGlobalVerts, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD); 
+  int vertsPerRank = numGlobalVerts/commSize;
+  int remainingVerts = numGlobalVerts % commSize;
+  int numLocalVerts = vertsPerRank;
+  if (rank == commSize-1) 
+    numLocalVerts += remainingVerts; 
+
+  MPI_Request* recvReqs = (MPI_Request*) malloc(sizeof(MPI_Request)*numLocalVerts);
+  double* recvIdsAndCoords = new double[numLocalVerts*3];
+  for (int i = 0; i < numLocalVerts; i++) 
+  {
+    MPI_Irecv(&recvIdsAndCoords[i*3], 3, MPI_DOUBLE, MPI_ANY_SOURCE, MPI_ANY_TAG, comm, &recvReqs[i]);
+  }
+
+  Omega_h::Write<Omega_h::GO> destRanks(global_vertex.size()); //don't need to store this
+  double* sendIdsAndCoords = new double[numOwnedVertices*3];
+  MPI_Request* sendReqs = (MPI_Request*) malloc(sizeof(MPI_Request)*numOwnedVertices);
+  int msgCnt = 0;
+  for (int i = 0; i < global_vertex.size(); i++) 
+  {
+    const auto gid = global_vertex[i];
+    destRanks[i] = gid/vertsPerRank;
+    if (gid >= (vertsPerRank*commSize-1)) 
+      destRanks[i] = commSize-1; //last rank gets the remainder
+    if (ownership_vert[i] == rank) 
+    {
+      sendIdsAndCoords[msgCnt*3] = static_cast<double>(gid);
+      sendIdsAndCoords[msgCnt*3+1] = vertexCoords[i*2];
+      sendIdsAndCoords[msgCnt*3+2] = vertexCoords[i*2+1];
+      int tag = 0;
+      MPI_Isend(&sendIdsAndCoords[msgCnt*3], 3, MPI_DOUBLE, destRanks[i], tag, comm, &sendReqs[msgCnt]);
+      msgCnt++;
+    }
+  }
+  assert(msgCnt == numOwnedVertices);
+
+  int mpiErr;
+  mpiErr = MPI_Waitall(numLocalVerts, recvReqs, MPI_STATUSES_IGNORE); assert(mpiErr == MPI_SUCCESS);
+  mpiErr = MPI_Waitall(numOwnedVertices, sendReqs, MPI_STATUSES_IGNORE); assert(mpiErr == MPI_SUCCESS);
+  free(recvReqs);
+  free(sendReqs);
+  delete [] sendIdsAndCoords;
+
+  double *coords = new double[numLocalVerts*2];
+  Omega_h::GO rankStartId = rank*numLocalVerts;
+  if (rank == commSize-1) 
+    rankStartId = rank*(numLocalVerts-remainingVerts);
+  for (int i = 0; i < numLocalVerts; i++) 
+  {
+    const int idx = static_cast<Omega_h::GO>(recvIdsAndCoords[i*3]) - rankStartId;
+    coords[idx*2] = recvIdsAndCoords[i*3+1];
+    coords[idx*2+1] = recvIdsAndCoords[i*3+2];
+  }
+  delete [] recvIdsAndCoords;
 
   PetscErrorCode ierr;
-  ierr = DMPlexCreateFromCellListPetsc(comm, dim, numCells, numVertices, numCorners, PETSC_TRUE, &core_cell[0], dim, &core_coord[0], dm);CHKERRQ(ierr);
+  PetscSF sfVert;
+  ierr = DMPlexCreateFromCellListParallelPetsc(comm, dim, numCells, numOwnedVertices, numGlobalVerts, 
+        numCorners, PETSC_TRUE, core_cell.data(), dim, core_coord.data(), &sfVert, dm);CHKERRQ(ierr);
 
-  printf("rank: %d, numCells: %d, numVertices: %d\n", rank, numCells, numVertices);
+  printf("rank: %d, numCells: %d, numVertices: %d\n", rank, numCells, numOwnedVertices);
 
   // Get the starting and ending index for the topology
   PetscInt cStart, cEnd, vStart, vEnd, eStart, eEnd;
