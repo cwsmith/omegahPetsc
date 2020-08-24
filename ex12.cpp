@@ -64,7 +64,7 @@ typedef struct {
   PC             pcmg;              /* This is needed for error monitoring */
   PetscBool      checkksp;          /* Whether to check the KSPSolve for runType == RUN_TEST */
 
-  char           mesh_type[4] = "box";
+  char           mesh_type[512] = "picpart.osh";
 } AppCtx;
 
 static PetscErrorCode zero(PetscInt dim, PetscReal time, const PetscReal x[], PetscInt Nc, PetscScalar *u, void *ctx)
@@ -499,7 +499,7 @@ static PetscErrorCode ProcessOptions(MPI_Comm comm, AppCtx *options)
   if (options->runType == RUN_TEST) {
     ierr = PetscOptionsBool("-run_test_check_ksp", "Check solution of KSP", "ex12.c", options->checkksp, &options->checkksp, NULL);CHKERRQ(ierr);
   }
-  ierr = PetscOptionsString("-mesh", "Use box or xgc mesh", "ex12.c", options->mesh_type, options->mesh_type, sizeof(options->mesh_type), &flg);CHKERRQ(ierr);
+  ierr = PetscOptionsString("-mesh", "Specify picpart path", "ex12.c", options->mesh_type, options->mesh_type, sizeof(options->mesh_type), &flg);CHKERRQ(ierr);
   ierr = PetscOptionsEnd();
   ierr = PetscLogEventRegister("CreateMesh", DM_CLASSID, &options->createMeshEvent);CHKERRQ(ierr);
   PetscFunctionReturn(0);
@@ -529,18 +529,10 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   MPI_Comm_rank(comm, &rank);
   MPI_Comm_size(comm, &commSize);
 
-  if (strcmp(options->mesh_type, "box") == 0)
-  {
-    mesh = Omega_h::build_box(lib.world(), OMEGA_H_SIMPLEX, 1., 1., 0, 
-            options->cells[0], options->cells[1], options->cells[2]);
-  }
-  else
-  {
-    Omega_h::filesystem::path file_path = "/gpfs/u/home/MPFS/MPFSzhqg/barn-shared/cws/xgc-picparts/24k/4p/picpart";
-    file_path += std::to_string(rank);
-    file_path += ".osh";
-    Omega_h::binary::read(file_path, lib.self(), &mesh);
-  }
+  Omega_h::filesystem::path file_path = options->mesh_type;
+  file_path += std::to_string(rank);
+  file_path += ".osh";
+  Omega_h::binary::read(file_path, lib.self(), &mesh);
 
   const int dim = mesh.dim();
   const int numCorners = 3;
