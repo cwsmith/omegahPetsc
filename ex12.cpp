@@ -543,14 +543,14 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   const int numCells = mesh.nelems();
   const int numCorners = 3;
 
-  Omega_h::Read<Omega_h::LO> vtxOwner = mesh.ask_owners(0).ranks;
+  Omega_h::HostRead<Omega_h::LO> vtxOwner(mesh.ask_owners(0).ranks);
   int numOwnedVertices = std::count(vtxOwner.data(), vtxOwner.data()+vtxOwner.size(), rank);
 
   // Get the vertices to cell adjacency
-  Omega_h::Read<Omega_h::LO> cell = mesh.ask_elem_verts();
+  Omega_h::HostRead<Omega_h::LO> cell(mesh.ask_elem_verts());
   assert(cell.size() == numCorners*numCells);
 
-  Omega_h::Read<Omega_h::Real> vertexCoords = mesh.coords();
+  Omega_h::HostRead<Omega_h::Real> vertexCoords(mesh.coords());
 
   // create the linear uniform partition of vertex coordinates
   // based on global vertex id
@@ -561,7 +561,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   if( rank == commSize-1 )
     numLocalVerts += remainingVerts;
 
-  Omega_h::Read<Omega_h::GO> global_vertex = mesh.globals(0);
+  Omega_h::HostRead<Omega_h::GO> global_vertex(mesh.globals(0));
 
   MPI_Request* recvReqs = (MPI_Request*) malloc(sizeof(MPI_Request)*numLocalVerts);
   double* recvIdsAndCoords = new double[numLocalVerts*3];
@@ -570,7 +570,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
         MPI_ANY_SOURCE, MPI_ANY_TAG, comm, &recvReqs[i]);
   }
 
-  Omega_h::Write<Omega_h::GO> destRanks(global_vertex.size()); //don't need to store this
+  Omega_h::HostWrite<Omega_h::GO> destRanks(global_vertex.size()); //don't need to store this
   double* sendIdsAndCoords = new double[numOwnedVertices*3];
   MPI_Request* sendReqs = (MPI_Request*) malloc(sizeof(MPI_Request)*numOwnedVertices);
   int msgCnt = 0;
