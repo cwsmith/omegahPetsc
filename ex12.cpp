@@ -1073,6 +1073,7 @@ static PetscErrorCode KSPMonitorError(KSP ksp, PetscInt its, PetscReal rnorm, vo
 
     ierr = KSPBuildSolution(ksp, NULL, &du);CHKERRQ(ierr);
     ierr = PetscObjectComposedDataGetInt((PetscObject) ksp, PetscMGLevelId, level, hasLevel);CHKERRQ(ierr);
+    assert(hasLevel);
     ierr = PCMGGetLevels(pc, &levels);CHKERRQ(ierr);
     ierr = PCMGGetSmoother(pc, levels-1, &fksp);CHKERRQ(ierr);
     ierr = KSPBuildSolution(fksp, NULL, &fu);CHKERRQ(ierr);
@@ -1150,6 +1151,7 @@ static PetscErrorCode SNESMonitorError(SNES snes, PetscInt its, PetscReal rnorm,
   ierr = VecAXPY(r, -1.0, u);CHKERRQ(ierr);
   /* View error */
   ierr = PetscObjectComposedDataGetInt((PetscObject) snes, PetscMGLevelId, level, hasLevel);CHKERRQ(ierr);
+  assert(hasLevel);
   ierr = PetscSNPrintf(buf, 256, "ex12-%D.h5", level);CHKERRQ(ierr);
 #if defined(PETSC_HAVE_HDF5)
   ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD, buf, FILE_MODE_APPEND, &viewer);CHKERRQ(ierr);
