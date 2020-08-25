@@ -570,21 +570,20 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
         MPI_ANY_SOURCE, MPI_ANY_TAG, comm, &recvReqs[i]);
   }
 
-  Omega_h::HostWrite<Omega_h::GO> destRanks(global_vertex.size()); //don't need to store this
   double* sendIdsAndCoords = new double[numOwnedVertices*3];
   MPI_Request* sendReqs = (MPI_Request*) malloc(sizeof(MPI_Request)*numOwnedVertices);
   int msgCnt = 0;
   for (int i = 0; i < global_vertex.size(); i++) {
     const auto gid = global_vertex[i];
-    destRanks[i] = gid/vertsPerRank;
+    int destRank = gid/vertsPerRank;
     if( gid >= (vertsPerRank*commSize-1) )
-      destRanks[i] = commSize-1; //last rank gets the remainder
+      destRank = commSize-1; //last rank gets the remainder
     if( vtxOwner[i] == rank ) {
       sendIdsAndCoords[msgCnt*3] = static_cast<double>(gid);
       sendIdsAndCoords[msgCnt*3+1] = vertexCoords[i*2];
       sendIdsAndCoords[msgCnt*3+2] = vertexCoords[i*2+1];
       int tag = 0;
-      MPI_Isend(&sendIdsAndCoords[msgCnt*3],3,MPI_DOUBLE,destRanks[i],
+      MPI_Isend(&sendIdsAndCoords[msgCnt*3],3,MPI_DOUBLE,destRank,
           tag,comm,&sendReqs[msgCnt]);
       msgCnt++;
     }
@@ -631,10 +630,6 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
         for (int i = 0; i < numLocalVerts; i++) {
           fprintf(stderr, "(%.2f,%.2f) ", coords[i*2], coords[i*2+1]);
         }
-        fprintf(stderr, "\n");
-        fprintf(stderr, "%d gid:destRank ", rank);
-        for (int i = 0; i < global_vertex.size(); i++)
-          fprintf(stderr, "%ld:%ld ", global_vertex[i], destRanks[i]);
         fprintf(stderr, "\n");
         for (int i = 0; i < vtxOwner.size(); i++)
         {
