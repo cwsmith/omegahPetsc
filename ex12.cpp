@@ -543,14 +543,14 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   const int numCells = mesh.nelems();
   const int numCorners = 3;
 
-  Omega_h::Read<Omega_h::LO> vtxOwner = mesh.ask_owners(0).ranks;
+  Omega_h::HostRead<Omega_h::LO> vtxOwner(mesh.ask_owners(0).ranks);
   int numOwnedVertices = std::count(vtxOwner.data(), vtxOwner.data()+vtxOwner.size(), rank);
 
   // Get the vertices to cell adjacency
-  Omega_h::Read<Omega_h::LO> cell = mesh.ask_elem_verts();
+  Omega_h::HostRead<Omega_h::LO> cell(mesh.ask_elem_verts());
   assert(cell.size() == numCorners*numCells);
 
-  Omega_h::Read<Omega_h::Real> vertexCoords = mesh.coords();
+  Omega_h::HostRead<Omega_h::Real> vertexCoords(mesh.coords());
 
   // create the linear uniform partition of vertex coordinates
   // based on global vertex id
@@ -561,7 +561,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   if( rank == commSize-1 )
     numLocalVerts += remainingVerts;
 
-  Omega_h::Read<Omega_h::GO> global_vertex = mesh.globals(0);
+  Omega_h::HostRead<Omega_h::GO> global_vertex(mesh.globals(0));
 
   MPI_Request* recvReqs = (MPI_Request*) malloc(sizeof(MPI_Request)*numLocalVerts);
   double* recvIdsAndCoords = new double[numLocalVerts*3];
@@ -570,21 +570,20 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
         MPI_ANY_SOURCE, MPI_ANY_TAG, comm, &recvReqs[i]);
   }
 
-  Omega_h::Write<Omega_h::GO> destRanks(global_vertex.size()); //don't need to store this
   double* sendIdsAndCoords = new double[numOwnedVertices*3];
   MPI_Request* sendReqs = (MPI_Request*) malloc(sizeof(MPI_Request)*numOwnedVertices);
   int msgCnt = 0;
   for (int i = 0; i < global_vertex.size(); i++) {
     const auto gid = global_vertex[i];
-    destRanks[i] = gid/vertsPerRank;
+    int destRank = gid/vertsPerRank;
     if( gid >= (vertsPerRank*commSize-1) )
-      destRanks[i] = commSize-1; //last rank gets the remainder
+      destRank = commSize-1; //last rank gets the remainder
     if( vtxOwner[i] == rank ) {
       sendIdsAndCoords[msgCnt*3] = static_cast<double>(gid);
       sendIdsAndCoords[msgCnt*3+1] = vertexCoords[i*2];
       sendIdsAndCoords[msgCnt*3+2] = vertexCoords[i*2+1];
       int tag = 0;
-      MPI_Isend(&sendIdsAndCoords[msgCnt*3],3,MPI_DOUBLE,destRanks[i],
+      MPI_Isend(&sendIdsAndCoords[msgCnt*3],3,MPI_DOUBLE,destRank,
           tag,comm,&sendReqs[msgCnt]);
       msgCnt++;
     }
@@ -631,10 +630,6 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
         for (int i = 0; i < numLocalVerts; i++) {
           fprintf(stderr, "(%.2f,%.2f) ", coords[i*2], coords[i*2+1]);
         }
-        fprintf(stderr, "\n");
-        fprintf(stderr, "%d gid:destRank ", rank);
-        for (int i = 0; i < global_vertex.size(); i++)
-          fprintf(stderr, "%ld:%ld ", global_vertex[i], destRanks[i]);
         fprintf(stderr, "\n");
         for (int i = 0; i < vtxOwner.size(); i++)
         {
@@ -1073,6 +1068,7 @@ static PetscErrorCode KSPMonitorError(KSP ksp, PetscInt its, PetscReal rnorm, vo
 
     ierr = KSPBuildSolution(ksp, NULL, &du);CHKERRQ(ierr);
     ierr = PetscObjectComposedDataGetInt((PetscObject) ksp, PetscMGLevelId, level, hasLevel);CHKERRQ(ierr);
+    assert(hasLevel);
     ierr = PCMGGetLevels(pc, &levels);CHKERRQ(ierr);
     ierr = PCMGGetSmoother(pc, levels-1, &fksp);CHKERRQ(ierr);
     ierr = KSPBuildSolution(fksp, NULL, &fu);CHKERRQ(ierr);
@@ -1150,6 +1146,7 @@ static PetscErrorCode SNESMonitorError(SNES snes, PetscInt its, PetscReal rnorm,
   ierr = VecAXPY(r, -1.0, u);CHKERRQ(ierr);
   /* View error */
   ierr = PetscObjectComposedDataGetInt((PetscObject) snes, PetscMGLevelId, level, hasLevel);CHKERRQ(ierr);
+  assert(hasLevel);
   ierr = PetscSNPrintf(buf, 256, "ex12-%D.h5", level);CHKERRQ(ierr);
 #if defined(PETSC_HAVE_HDF5)
   ierr = PetscViewerHDF5Open(PETSC_COMM_WORLD, buf, FILE_MODE_APPEND, &viewer);CHKERRQ(ierr);
