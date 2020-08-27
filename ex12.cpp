@@ -548,6 +548,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
 
   Omega_h::Read<Omega_h::Real> vertexCoords = mesh.coords();
 
+  // Get the core of the picpart
   std::vector<int> core_cell;
   for (int i = 0; i < ownership_elem.size(); i++)
   {
@@ -561,24 +562,16 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   }
   assert(core_cell.size() == numCorners*numCells);
 
-  std::vector<double> core_coord;
-  for (int i = 0; i < ownership_vert.size(); i++)
-  {
-    if (ownership_vert[i] == rank)
-    {
-      core_coord.push_back(vertexCoords[2*i]);
-      core_coord.push_back(vertexCoords[2*i+1]);
-    }
-
-  }
-  assert(core_coord.size() == dim*numOwnedVertices);
-
-  Omega_h::Read<Omega_h::GO> global_vertex = mesh.globals(0);
   // Change the local to global vertex id for adjacency
+  Omega_h::Read<long> global_vertex = mesh.get_array<long>(0, "gids");
   for (unsigned int i = 0; i < core_cell.size(); i++)
   {
     core_cell[i] = global_vertex[core_cell[i]];
   }
+  
+  fprintf(stderr, "rank: %d, Min(GlobalVtxId): %d, Max(GlobalVtxId): %d\n", rank, 
+          *std::min_element(core_cell.begin(), core_cell.end()), 
+          *std::max_element(core_cell.begin(), core_cell.end()));
 
   // create the linear uniform partition of vertex coordinates
   // based on global vertex id
@@ -640,10 +633,10 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
 
   PetscErrorCode ierr;
   PetscSF sfVert;
-  ierr = DMPlexCreateFromCellListParallelPetsc(comm, dim, numCells, numOwnedVertices, numGlobalVerts, 
-        numCorners, PETSC_TRUE, core_cell.data(), dim, core_coord.data(), &sfVert, dm);CHKERRQ(ierr);
+  ierr = DMPlexCreateFromCellListParallelPetsc(comm, dim, numCells, numLocalVerts, numGlobalVerts, 
+        numCorners, PETSC_TRUE, core_cell.data(), dim, coords, &sfVert, dm);CHKERRQ(ierr);
 
-  printf("rank: %d, numCells: %d, numVertices: %d\n", rank, numCells, numOwnedVertices);
+  printf("rank: %d, numCells: %d, numLocalVertices: %d\n", rank, numCells, numLocalVerts);
 
   // Get the starting and ending index for the topology
   PetscInt cStart, cEnd, vStart, vEnd, eStart, eEnd;
