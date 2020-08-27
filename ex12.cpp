@@ -520,14 +520,14 @@ static PetscErrorCode CreateBCLabel(DM dm, const char name[])
 static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
 {
   assert(options->dim == 2);
+  PetscErrorCode ierr;
 
   auto lib = Omega_h::Library();
   auto mesh = Omega_h::Mesh(&lib);
   if (strcmp(options->mesh_type, "box") == 0)
   {
-    // Since the box mesh is already partitioned by Omega_h, this mesh would not work with Parmetis.
-    mesh = Omega_h::build_box(lib.world(), OMEGA_H_SIMPLEX, 1., 1., 0, options->cells[0], options->cells[1], options->cells[2]);
-    exit(EXIT_FAILURE);
+    ierr = DMPlexCreateBoxMesh(comm, options->dim, options->simplex, options->cells, NULL, NULL, options->periodicity, options->interpolate, dm);CHKERRQ(ierr);
+    PetscFunctionReturn(0);
   }
   else
   {
@@ -546,7 +546,6 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   Omega_h::HostRead<Omega_h::LO> cell(mesh.ask_elem_verts());
   assert(cell.size() == numCorners*numCells);
   
-  PetscErrorCode ierr;
   ierr = DMPlexCreateFromCellListPetsc(comm, dim, numCells, numVertices, numCorners, PETSC_TRUE, cell.data(), dim, vertexCoords.data(), dm);CHKERRQ(ierr);
 
   // Get the starting and ending index for the topology
