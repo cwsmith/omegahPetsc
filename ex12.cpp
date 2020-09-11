@@ -603,31 +603,86 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   {
     Omega_h::Dist d = mesh.ask_dist(0);
     auto fRanks = d.items2ranks();
-    std::unordered_set<int> nborRanks;
+    //get list of unique neighbors
+    std::unordered_set<int> uniqNborRanks;
+    //forward neibhors - defined by unowned boundary ents
     for(int i=0; i<fRanks.size(); i++)
       if( fRanks[i] != rank )
-        nborRanks.insert(fRanks[i]);
+        uniqNborRanks.insert(fRanks[i]);
     auto dinv = d.invert();
     auto rRanks = dinv.items2ranks();
+    //reverse neibhors - defined by owned boundary ents
     for(int i=0; i<rRanks.size(); i++)
       if( rRanks[i] != rank )
-        nborRanks.insert(rRanks[i]);
-    for (int r = 0; r < commSize; r++) { //serialize over ranks for clean printing
-      if(rank == r) {
-        fprintf(stderr, "%d numVerts %d fRanks.size() %d : ", rank, mesh.nverts(), fRanks.size());
-        for(int i=0; i<fRanks.size(); i++)
-          fprintf(stderr, "%d ", fRanks[i]);
-        fprintf(stderr, "\n");
-        fprintf(stderr, "%d numGhosts %d rRanks.size() %d : ", rank, numVerticesGhost, rRanks.size());
-        for(int i=0; i<rRanks.size(); i++)
-          fprintf(stderr, "%d ", rRanks[i]);
-        fprintf(stderr, "\n");
-        fprintf(stderr, "%d numGhosts %d rRanks.size() %d : ", rank, numVerticesGhost, rRanks.size());
-        for(int i=0; i<nborRanks.size(); i++)
+        uniqNborRanks.insert(rRanks[i]);
+    //create an array of the neighbors
+    Omega_h::HostWrite<Omega_h::LO> destRanks(uniqNborRanks.size());
+    int i = 0;
+    for(const auto& nbor : uniqNborRanks)
+      destRanks[i++] = nbor;
+
+    auto debug = false;
+    if(debug) {
+      for (int r = 0; r < commSize; r++) { //serialize over ranks for clean printing
+        if(rank == r) {
+          fprintf(stderr, "------%d------\n", rank);
+          fprintf(stderr, "numVerts %d fRanks.size() %d : ", mesh.nverts(), fRanks.size());
+          for(const auto& fr : fRanks)
+            fprintf(stderr, "%d ", fr);
+          fprintf(stderr, "\n");
+          fprintf(stderr, "numGhosts %d rRanks.size() %d : ",numVerticesGhost, rRanks.size());
+          for(const auto& rr : rRanks)
+            fprintf(stderr, "%d ", rr);
+          fprintf(stderr, "\n");
+          fprintf(stderr, "destRanks.size() %d : ", destRanks.size());
+          for(auto i = 0; i < destRanks.size(); i++)
+            fprintf(stderr, "%d ", destRanks[i]);
+          fprintf(stderr, "\n");
+        }
+        MPI_Barrier(MPI_COMM_WORLD);
+      }
+      MPI_Barrier(MPI_COMM_WORLD);
+    }
+
+    Omega_h::Dist nbors;
+    nbors.set_parent_comm(lib.world());
+    Omega_h::Read<int> destRanks_r(destRanks);
+    Omega_h::Read<int> destIdx_r(destRanks.size(), 0);
+    Omega_h::Read<int> elmCnt(destRanks.size(), numCells);
+    if(debug) {
+      fprintf(stderr, "%d 0.0\n", rank);
+      for (int r = 0; r < commSize; r++) {
+        if(rank == r) {
+          fprintf(stderr, "------%d------\n", rank);
+          for(auto i = 0; i < destRanks_r.size(); i++)
+            fprintf(stderr, "%d %d", destRanks_r[i], destIdx_r[i]);
+          fprintf(stderr, "\n");
+        }
+        MPI_Barrier(MPI_COMM_WORLD);
+      }
+      MPI_Barrier(MPI_COMM_WORLD);
+      if(!rank)
+        fprintf(stderr, "------------\n");
+    }
+    nbors.set_dest_ranks(destRanks_r);
+    nbors.set_dest_idxs(destIdx_r,1);
+    auto nborElmCnts = nbors.exch(elmCnt,1);
+    auto nborRanks = nbors.msgs2ranks();
+    assert(nborRanks.size() == nborElmCnts.size());
+    if(true) {
+      for (int r = 0; r < commSize; r++) {
+        if(rank == r) {
+          fprintf(stderr, "------%d------\n", rank);
+          for(auto i = 0; i < nborElmCnts.size(); i++)
+            fprintf(stderr, "%d:%d ", nborRanks[i], nborElmCnts[i]);
+          fprintf(stderr, "\n");
+        }
+        MPI_Barrier(MPI_COMM_WORLD);
       }
       MPI_Barrier(MPI_COMM_WORLD);
     }
   }
+  MPI_Abort(MPI_COMM_WORLD,0);
 
   int *localVertex;
   PetscSFNode *remoteVertex;
