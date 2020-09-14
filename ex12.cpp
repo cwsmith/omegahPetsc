@@ -651,8 +651,16 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
       numVerticesGhost++;
   }
 
-  std::cerr << rank << " numCells: " << numCells << " numVertices: " <<
-    numVertices << " numVerticesNotOwned: " << numVerticesGhost << "\n";
+  const auto debug = true;
+  if(debug) {
+    for (int i = 0; i < commSize; i++) {
+      if(rank == i) {
+        std::cerr << rank << " numCells: " << numCells << " numVertices: " <<
+          numVertices << " numVerticesNotOwned: " << numVerticesGhost << "\n";
+      }
+      MPI_Barrier(comm);
+    }
+  }
 
   Omega_h::Read<int> nborRanks;
   Omega_h::Read<int> nborElmCnts;
@@ -697,6 +705,18 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   ierr = DMPlexGetHeightStratum(*dm, 0, &cStart, &cEnd); /* cells */ 
   ierr = DMPlexGetHeightStratum(*dm, 1, &eStart, &eEnd); /* edges */ 
   ierr = DMPlexGetHeightStratum(*dm, 2, &vStart, &vEnd); /* vertices */
+
+  if(debug) {
+    for (int i = 0; i < commSize; i++) {
+      if(rank == i) {
+        if(!rank)
+          std::cerr << "<rank> <quant> <omega count:petsc count>\n";
+        std::cerr << rank << " numCells " << cEnd-cStart << ":" << numCells << " numVerts "
+          << vEnd-vStart << ":" << numVertices << "\n";
+      }
+      MPI_Barrier(comm);
+    }
+  }
 
   /* 
   Iterate through all the edges and then check if each edge is shared by two different cells by 
