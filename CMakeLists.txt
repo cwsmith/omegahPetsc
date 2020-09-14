@@ -30,7 +30,7 @@ target_compile_options(ex12 PRIVATE
   -Wno-unused-parameter>)
 
 set(petscArgs
-  "-run_type full
+  -run_type full
   -petscpartitioner_type parmetis
   -dm_refine 0
   -bc_type dirichlet
@@ -48,7 +48,7 @@ set(petscArgs
   -ksp_converged_reason
   -snes_view
   -show_solution 0
-  -log_view")
+  -log_view)
 
 include(CTest)
 
