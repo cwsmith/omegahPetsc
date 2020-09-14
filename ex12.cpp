@@ -630,8 +630,6 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   const int numVertices = mesh.nverts();
   const int numCorners = 3;
 
-  std::cerr << rank << " numCells: " << numCells << " numVertices: " << numVertices << "\n";
-
   // Get the coordinates of vertices
   Omega_h::HostRead<Omega_h::Real> vertexCoords(mesh.coords());
   assert(vertexCoords.size() == dim*numVertices);
@@ -644,6 +642,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   Omega_h::Read<Omega_h::LO> vert_owned_id = mesh.ask_owners(0).idxs;
 
   PetscErrorCode ierr;
+  //create a plex object on each process from local info
   ierr = DMPlexCreateFromCellListPetsc(comm, dim, numCells, numVertices, numCorners, PETSC_FALSE, cell.data(), dim, vertexCoords.data(), dm);CHKERRQ(ierr);
 
   int numVerticesGhost = 0; //vertices that are not owned
@@ -652,13 +651,18 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
       numVerticesGhost++;
   }
 
+  std::cerr << rank << " numCells: " << numCells << " numVertices: " <<
+    numVertices << " numVerticesNotOwned: " << numVerticesGhost << "\n";
+
   Omega_h::Read<int> nborRanks;
   Omega_h::Read<int> nborElmCnts;
   getNeighborElmCounts(mesh, nborRanks, nborElmCnts);
   assert( nborRanks.size() > 0 &&
          (nborRanks.size() == nborElmCnts.size()) );
-
-  MPI_Abort(MPI_COMM_WORLD,0);
+  typedef std::map<int,int> Mi2i;
+  Mi2i nbor2ElmCnt;
+  for(int i = 0; i < nborRanks.size(); i++)
+    nbor2ElmCnt[nborRanks[i]] = nborElmCnts[i];
 
   int *localVertex;
   PetscSFNode *remoteVertex;
@@ -666,11 +670,13 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   ierr = PetscMalloc1(numVerticesGhost, &remoteVertex);CHKERRQ(ierr);
   for (int i = 0, j = 0; i < vert_owned_rank.size(); i++)
   {
-    if (rank != vert_owned_rank[i])
+    const auto nborRank= vert_owned_rank[i];
+    if (rank != nborRank)
     {
       localVertex[j] = numCells+i;
-      remoteVertex[j].index = vert_owned_id[i]+numCells;
-      remoteVertex[j].rank = vert_owned_rank[i];
+      const auto nborElmCnt = nbor2ElmCnt[nborRank];
+      remoteVertex[j].index = vert_owned_id[i]+nborElmCnt;
+      remoteVertex[j].rank = nborRank;
       j++;
     }
   }
