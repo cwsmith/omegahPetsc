@@ -85,3 +85,9 @@ mpiTest(box 4 ./ex12
   -vec_view vtk:box_p4_sol.vtu:vtk_vtu
   -cells 4,4,0
   ${petscArgs})
+
+mpiTest(box512 4 ./ex12
+  -cells 512,512,0
+  -mesh box
+  -vec_view vtk:box_p4_sol.vtu:vtk_vtu
+  ${petscArgs})
