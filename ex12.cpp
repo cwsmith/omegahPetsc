@@ -582,7 +582,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
         global_cell.push_back(cell[3*i+2]);
       }
     }
-    assert(global_cell.size() == numCorners*numCells);
+    assert(global_cell.size() == static_cast<size_t>(numCorners*numCells));
 
     // Change the local to global vertex id for adjacency
     global_vertex = mesh.get_array<Omega_h::GO>(0, "gids");
@@ -693,9 +693,9 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
           }
         }
 
-        for (int i = 0; i < global_cell.size(); i+=3)
+        for (size_t i = 0; i < global_cell.size(); i+=3)
         {
-          fprintf(stderr, "rank: %d, elmIdx %d: %d, %d, %d\n", rank,
+          fprintf(stderr, "rank: %d, elmIdx %zu: %d, %d, %d\n", rank,
               i/3, global_cell[i], global_cell[i+1], global_cell[i+2]);
         }
         fprintf(stderr, "rank: %d, numCells: %d, numOwnedVertices: %d\n", rank, numCells, numOwnedVertices);
@@ -798,9 +798,7 @@ static PetscErrorCode CreateMesh(MPI_Comm comm, AppCtx *user, DM *dm)
     ierr = DMPlexSetRefinementUniform(*dm, PETSC_FALSE);CHKERRQ(ierr);
   }
   {
-    PetscPartitioner part;
     DM               refinedMesh     = NULL;
-    DM               distributedMesh = NULL;
 
     /* Refine mesh using a volume constraint */
     if (refinementLimit > 0.0) {
