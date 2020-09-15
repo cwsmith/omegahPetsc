@@ -573,49 +573,12 @@ void getNeighborElmCounts(Omega_h::Mesh m, Omega_h::Read<int>& nborRanks,
 
 static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
 {
-  /* 
-  Omega_h mesh representation
-   10---27---12----28---13
-    |       / |       / |
-    | 4    /  |  5   /  |
-   22    21  26    25   29
-    |   /  1  |   /   3 |
-    |  /      |  /      |
-    9---20---11----24---14
-    |       / |        /|
-    | 2   /   | 6    /  |
-   19   18   23    31   32
-    |  /   0  |   /   7 |
-    | /       |  /      |
-    8---17---15----30---16 
-
-  PETSc mesh representation
-   10---27---12----29---13
-    |       / |       / |
-    | 4    /  |  5   /  |
-   28    22  21    26   25
-    |   /  1  |   /   3 |
-    |  /      |  /      |
-    9---20---11----24---14
-    |       / |        /|
-    | 2   /   | 6    /  |
-   23   19   18    30   32
-    |  /   0  |   /   7 |
-    | /       |  /      |
-    8---17---15----31---16
-  */
-
-  assert(options->dim == 2);
-
   auto lib = Omega_h::Library();
   auto mesh = Omega_h::Mesh(&lib);
   if (strcmp(options->mesh_type, "box") == 0)
   {
-    const auto numElmsX = options->cells[0];
-    const auto numElmsY = options->cells[1];
-    mesh = Omega_h::build_box(lib.world(), OMEGA_H_SIMPLEX,
-        1., 1., 0, numElmsX, numElmsY, 0);
-    Omega_h::vtk::write_parallel("ohBox", &mesh, 2); 
+    mesh = Omega_h::build_box(lib.world(), OMEGA_H_SIMPLEX, 1., 1., 0,
+        options->cells[0], options->cells[1], options->cells[2]);
   }
   else
   {
