@@ -581,7 +581,6 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
         global_cell.push_back(cell[3*i+1]);
         global_cell.push_back(cell[3*i+2]);
       }
-      
     }
     assert(global_cell.size() == numCorners*numCells);
 
@@ -591,8 +590,8 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     {
       global_cell[i] = global_vertex[global_cell[i]];
     }
-      
-    MPI_Allreduce(&numOwnedVertices, &numGlobalVerts, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD); 
+
+    MPI_Allreduce(&numOwnedVertices, &numGlobalVerts, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
   }
   else
   {
@@ -614,7 +613,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     {
       global_cell.push_back(global_vertex[cell[i]]);
     }
-    
+
     numGlobalVerts = mesh.nglobal_ents(0);
   }
 
@@ -628,7 +627,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
 
   MPI_Request* recvReqs = (MPI_Request*) malloc(sizeof(MPI_Request)*numLocalVerts);
   double* recvIdsAndCoords = new double[numLocalVerts*3];
-  for (int i = 0; i < numLocalVerts; i++) 
+  for (int i = 0; i < numLocalVerts; i++)
   {
     MPI_Irecv(&recvIdsAndCoords[i*3], 3, MPI_DOUBLE, MPI_ANY_SOURCE, MPI_ANY_TAG, comm, &recvReqs[i]);
   }
@@ -636,13 +635,13 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   double* sendIdsAndCoords = new double[numOwnedVertices*3];
   MPI_Request* sendReqs = (MPI_Request*) malloc(sizeof(MPI_Request)*numOwnedVertices);
   int msgCnt = 0;
-  for (int i = 0; i < global_vertex.size(); i++) 
+  for (int i = 0; i < global_vertex.size(); i++)
   {
     const auto gid = global_vertex[i];
     int destRank = gid/vertsPerRank;
-    if (gid >= (vertsPerRank*commSize-1)) 
+    if (gid >= (vertsPerRank*commSize-1))
       destRank = commSize-1; //last rank gets the remainder
-    if (ownership_vert[i] == rank) 
+    if (ownership_vert[i] == rank)
     {
       sendIdsAndCoords[msgCnt*3] = static_cast<double>(gid);
       sendIdsAndCoords[msgCnt*3+1] = vertexCoords[i*2];
@@ -663,15 +662,15 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
 
   double *coords = new double[numLocalVerts*2];
   Omega_h::GO rankStartId = rank*numLocalVerts;
-  if (rank == commSize-1) 
+  if (rank == commSize-1)
     rankStartId = rank*(numLocalVerts-remainingVerts);
-  for (int i = 0; i < numLocalVerts; i++) 
+  for (int i = 0; i < numLocalVerts; i++)
   {
     const int idx = static_cast<Omega_h::GO>(recvIdsAndCoords[i*3]) - rankStartId;
     coords[idx*2] = recvIdsAndCoords[i*3+1];
     coords[idx*2+1] = recvIdsAndCoords[i*3+2];
   }
-  delete [] recvIdsAndCoords; 
+  delete [] recvIdsAndCoords;
 
   if(options->debug > 0) {
     for (int r = 0; r < commSize; r++)
@@ -701,7 +700,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
         }
         fprintf(stderr, "rank: %d, numCells: %d, numOwnedVertices: %d\n", rank, numCells, numOwnedVertices);
         fprintf(stderr, "rank: %d, Min(GlobalVtxId): %d, Max(GlobalVtxId): %d\n", rank, 
-                *std::min_element(global_cell.begin(), global_cell.end()), 
+                *std::min_element(global_cell.begin(), global_cell.end()),
                 *std::max_element(global_cell.begin(), global_cell.end()));
       }
       MPI_Barrier(MPI_COMM_WORLD);
