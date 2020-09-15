@@ -611,7 +611,10 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   auto mesh = Omega_h::Mesh(&lib);
   if (strcmp(options->mesh_type, "box") == 0)
   {
-    mesh = Omega_h::build_box(lib.world(), OMEGA_H_SIMPLEX, 1., 1., 0, 2, 2, 0);
+    const auto numElmsX = options->cells[0];
+    const auto numElmsY = options->cells[1];
+    mesh = Omega_h::build_box(lib.world(), OMEGA_H_SIMPLEX,
+        1., 1., 0, numElmsX, numElmsY, 0);
     Omega_h::vtk::write_parallel("ohBox", &mesh, 2); 
   }
   else
