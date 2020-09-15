@@ -521,7 +521,7 @@ static PetscErrorCode CreateBCLabel(DM dm, const char name[])
 }
 
 void getNeighborElmCounts(Omega_h::Mesh m, Omega_h::Read<int>& nborRanks,
-    Omega_h::Read<int>& nborElmCnts) {
+    Omega_h::Read<int>& nborElmCnts, bool debug=false) {
   auto comm = m.comm();
   const auto rank = comm->rank();
   Omega_h::Dist d = m.ask_dist(0);
@@ -557,7 +557,7 @@ void getNeighborElmCounts(Omega_h::Mesh m, Omega_h::Read<int>& nborRanks,
   nborElmCnts = nbors.exch(elmCnt,1);
   nborRanks = nbors.msgs2ranks();
   assert(nborRanks.size() == nborElmCnts.size());
-  if(true) {
+  if(debug) {
     for (int r = 0; r < comm->size(); r++) {
       if(rank == r) {
         fprintf(stderr, "------%d------\n", rank);
@@ -569,7 +569,6 @@ void getNeighborElmCounts(Omega_h::Mesh m, Omega_h::Read<int>& nborRanks,
     }
     MPI_Barrier(MPI_COMM_WORLD);
   }
-  fprintf(stderr, "%d 1.0\n", rank);
 }
 
 static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
@@ -651,7 +650,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
       numVerticesGhost++;
   }
 
-  const auto debug = true;
+  const auto debug = options->debug;
   if(debug) {
     for (int i = 0; i < commSize; i++) {
       if(rank == i) {
@@ -664,7 +663,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
 
   Omega_h::Read<int> nborRanks;
   Omega_h::Read<int> nborElmCnts;
-  getNeighborElmCounts(mesh, nborRanks, nborElmCnts);
+  getNeighborElmCounts(mesh, nborRanks, nborElmCnts, debug);
   assert( nborRanks.size() > 0 &&
          (nborRanks.size() == nborElmCnts.size()) );
   typedef std::map<int,int> Mi2i;
@@ -693,7 +692,9 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   ierr = DMGetPointSF(*dm, &pointSF);CHKERRQ(ierr);
   ierr = PetscSFSetGraph(pointSF, numCells+numVertices, numVerticesGhost, localVertex, PETSC_OWN_POINTER, remoteVertex, PETSC_OWN_POINTER);CHKERRQ(ierr);
 
-  PetscSFView(pointSF, PETSC_VIEWER_STDOUT_WORLD);
+  if(debug) {
+    PetscSFView(pointSF, PETSC_VIEWER_STDOUT_WORLD);
+  }
 
   DM dm_int;
   ierr = DMPlexInterpolate(*dm, &dm_int);
