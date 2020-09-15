@@ -46,7 +46,6 @@ set(petscArgs
   -snes_converged_reason
   ::ascii_info_detail
   -ksp_converged_reason
-  -snes_view
   -show_solution 0
   -log_view)
 
@@ -62,11 +61,13 @@ endfunction(mpiTest)
 mpiTest(24kxgc 2 ./ex12
     -mesh ${CMAKE_SOURCE_DIR}/24k.osh
     -vec_view vtk:24k_p2_sol.vtu:vtk_vtu
+    -snes_view
     ${petscArgs})
 
 mpiTest(24kxgc 4 ./ex12
     -mesh ${CMAKE_SOURCE_DIR}/24k.osh
     -vec_view vtk:24k_p4_sol.vtu:vtk_vtu
+    -snes_view
     ${petscArgs})
 
 mpiTest(box 2 ./ex12
