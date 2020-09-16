@@ -526,7 +526,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   if (strcmp(options->mesh_type, "box") == 0)
   {
     mesh = Omega_h::build_box(lib.world(), OMEGA_H_SIMPLEX, 1., 1., 0, 
-        options->cells[0], options->cells[1], options->cells[2]);
+        options->cells[0], options->cells[1], 0);
   }
   else
   {
