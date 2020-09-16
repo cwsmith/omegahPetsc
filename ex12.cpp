@@ -562,7 +562,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   if (strcmp(options->mesh_type, "picpart") == 0)
   {
     Omega_h::HostRead<Omega_h::LO> ownership_elem(mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership"));
-    Omega_h::HostRead<Omega_h::LO> ownership_vert(mesh.get_array<Omega_h::LO>(0, "ownership"));
+    ownership_vert = mesh.get_array<Omega_h::LO>(0, "ownership");
 
     numOwnedVertices = std::count(ownership_vert.data(), ownership_vert.data()+ownership_vert.size(), rank);
     numCells = std::count(ownership_elem.data(), ownership_elem.data()+ownership_elem.size(), rank);
@@ -570,7 +570,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     // Get the vertices to cell adjacency
     Omega_h::HostRead<Omega_h::LO> cell(mesh.ask_elem_verts());
 
-    Omega_h::HostRead<Omega_h::Real> vertexCoords(mesh.coords());
+    vertexCoords = mesh.coords();
 
     // Get the core of the picpart
     for (int i = 0; i < ownership_elem.size(); i++)
@@ -597,14 +597,14 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   {
     numCells = mesh.nelems();
 
-    Omega_h::HostRead<Omega_h::LO> ownernship_vert(mesh.ask_owners(0).ranks);
-    numOwnedVertices = std::count(ownernship_vert.data(), ownernship_vert.data()+ownernship_vert.size(), rank);
+    ownership_vert = mesh.ask_owners(0).ranks;
+    numOwnedVertices = std::count(ownership_vert.data(), ownership_vert.data()+ownership_vert.size(), rank);
 
     // Get the vertices to cell adjacency
     Omega_h::HostRead<Omega_h::LO> cell(mesh.ask_elem_verts());
     assert(cell.size() == numCorners*numCells);
 
-    Omega_h::HostRead<Omega_h::Real> vertexCoords(mesh.coords());
+    vertexCoords = mesh.coords();
 
     global_vertex = mesh.globals(0);
 
