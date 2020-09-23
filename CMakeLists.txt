@@ -91,3 +91,15 @@ mpiTest(box512 4 ./ex12
   -mesh box
   -vec_view vtk:box_p4_sol.vtu:vtk_vtu
   ${petscArgs})
+  
+mpiTest(picpart 4 ./ex12
+  -mesh picpart 
+  -picpart_path ${CMAKE_SOURCE_DIR}/xgc-picparts/24k/4p/picpart
+  -vec_view vtk:24k_pic4_sol.vtu:vtk_vtu
+  ${petscArgs})
+
+mpiTest(picpart 24 ./ex12
+  -mesh picpart
+  -picpart_path ${CMAKE_SOURCE_DIR}/xgc-picparts/24k/24p/picpart
+  -vec_view vtk:24k_pic24_sol.vtu:vtk_vtu
+  ${petscArgs})
