@@ -33,6 +33,7 @@ target_link_libraries(ex12 Omega_h::omega_h PkgConfig::PETSC)
 target_compile_options(ex12 PRIVATE
   $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
   ${HOST_FLAG_PREFIX} -Wno-unused-parameter>)
+  -Wno-unused-parameter>)
 
 set(petscArgs
   -run_type full
@@ -51,7 +52,6 @@ set(petscArgs
   -snes_converged_reason
   ::ascii_info_detail
   -ksp_converged_reason
-  -snes_view
   -show_solution 0
   -log_view)
 
@@ -67,11 +67,13 @@ endfunction(mpiTest)
 mpiTest(24kxgc 2 ./ex12
     -mesh ${CMAKE_SOURCE_DIR}/24k.osh
     -vec_view vtk:24k_p2_sol.vtu:vtk_vtu
+    -snes_view
     ${petscArgs})
 
 mpiTest(24kxgc 4 ./ex12
     -mesh ${CMAKE_SOURCE_DIR}/24k.osh
     -vec_view vtk:24k_p4_sol.vtu:vtk_vtu
+    -snes_view
     ${petscArgs})
 
 mpiTest(box 2 ./ex12
@@ -90,16 +92,19 @@ mpiTest(box512 4 ./ex12
   -cells 512,512,0
   -mesh box
   -vec_view vtk:box_p4_sol.vtu:vtk_vtu
+  -snes_view
   ${petscArgs})
   
 mpiTest(picpart 4 ./ex12
   -mesh picpart 
   -picpart_path ${CMAKE_SOURCE_DIR}/xgc-picparts/24k/4p/picpart
   -vec_view vtk:24k_pic4_sol.vtu:vtk_vtu
+  -snes_view
   ${petscArgs})
 
 mpiTest(picpart 24 ./ex12
   -mesh picpart
   -picpart_path ${CMAKE_SOURCE_DIR}/xgc-picparts/24k/24p/picpart
   -vec_view vtk:24k_pic24_sol.vtu:vtk_vtu
+  -snes_view
   ${petscArgs})
