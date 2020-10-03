@@ -574,6 +574,7 @@ void getNeighborElmCounts(Omega_h::Mesh m, Omega_h::Read<int>& nborRanks,
 
 const int numVertsPerTri = 3;
 
+//FIXME - create the array on the gpu
 void getPicPartCoreElmToVtxArray(Omega_h::Mesh &mesh, int& numCells, std::vector<int>& global_cell) {
   auto ownership_elem_d = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
   Omega_h::HostRead<Omega_h::LO> ownership_elem(ownership_elem_d);
@@ -599,10 +600,14 @@ void getPicPartCoreElmToVtxArray(Omega_h::Mesh &mesh, int& numCells, std::vector
   }
 }
 
+//petsc needs an array of vertex coordinates for all vertices in the core on
+//this process
+//FIXME the implementation below is not including shared vertices (not owned
+//by this rank) in the coordinates array
 void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh,
-  int& numVertices, int& numOwnedVertices,
-  Omega_h::HostRead<Omega_h::Real>& vertexCoords,
-  Omega_h::Read<Omega_h::LO>& vtxMap) {
+    int& numVertices, int& numOwnedVertices,
+    Omega_h::HostRead<Omega_h::Real>& vertexCoords,
+    Omega_h::Read<Omega_h::LO>& vtxMap) {
   const int rank = mesh.comm()->rank();
   //read tag placed by pumipic that defines which process owns each vertex
   //the inner-most boundary of the core is owned by rank-1, all other vertices
@@ -614,9 +619,9 @@ void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh,
   }, numOwnedVertices);
   assert(numOwnedVertices < mesh.nverts());
   //for each element owned by this rank mark the vertices bound by it as owned
+  const Omega_h::Write<Omega_h::LO> isCoreVtx(mesh.nverts());
   const auto elms2verts_d = mesh.ask_elem_verts();
   const auto elmOwnership_d = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
-  const Omega_h::Write<Omega_h::LO> isCoreVtx(mesh.nverts());
   const auto markCoreVerts = OMEGA_H_LAMBDA(Omega_h::LO elm) {
     if ( elmOwnership_d[elm] == rank ) {
       for(int i=0; i<numVertsPerTri; i++) {
@@ -649,40 +654,47 @@ void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh,
   vtxMap = vtxMap_d;
 }
 
+// The boundary of the core needs to have links between the 
+// owner vertices and the non-owner vertices.
+// These links are defined by the index of the owner vtx on the owning process
+// being sent to all processes containing non-owner copies of that vtx.
+// Note, the local index must be in the array that petsc gets for local
+// vertices.
 void getPicPartCoreVtxRemotes(Omega_h::mesh, 
   Omega_h::HostRead<Omega_h::I32>& vtxRemoteRank,
   Omega_h::HostRead<Omega_h::LO>& vtxRemoteIdx) {
   const int rank = mesh.comm()->rank();
   //get array of face owners
-  const auto faceOwner_d = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
+  const auto faceOwner = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
+  const auto vtxOwner_d = mesh.get_array<Omega_h::LO>(0, "ownership");
   //get edges-to-faces
   const auto edges2faces = mesh.ask_up(Omega_h::EDGE, o::FACE);
   auto e2f_vals = edges2faces.ab2b; // CSR value array
   auto e2f_offsets = edges2faces.a2ab; // CSR offset array, index by mesh edge ids
   const auto edges2verts = mesh.ask_down(o::EDGE, o::VERT);
-  Omega_h::Write<Omegah::LO> sharedVtx_d(mesh.nverts(),0);
+  Omega_h::Write<Omegah::LO> sharedVtxRemoteRank_d(mesh.nverts(),rank);
   //loop over edges and count vertices that are on the boundary of the core -
   //they have an two adjacent faces and one has this rank as the owner
-  const auto markSharedVtx = OMEGA_H_LAMBDA(Omega_h::LO edge) {
-    const auto first = e2f_offsets[edge];
-    const auto last = e2f_offsets[edge+1];
+  const auto markSharedVtx = OMEGA_H_LAMBDA(Omega_h::LO i) {
+    const auto first = e2f_offsets[i];
+    const auto last = e2f_offsets[i+1];
     const auto deg = last-first;
     if ( deg == 2 ) { 
       const auto faceL = e2f_vals[first];
       const auto faceR = e2f_vals[first+1];
-      const auto vtxL = edges2verts[edge*2];
-      const auto vtxR = edges2verts[edge*2+1];
-      const auto isShared = (faceOwner_d[faceL] == rank && faceOwner_d[faceR] != rank) ||
-                            (faceOwner_d[faceR] == rank && faceOwner_d[faceL] != rank);
+      const auto vtxL = edges2verts[i*2];
+      const auto vtxR = edges2verts[i*2+1];
+      const auto isShared = (faceOwner[faceL] == rank && faceOwner[faceR] != rank) ||
+                            (faceOwner[faceR] == rank && faceOwner[faceL] != rank);
       if( isShared ) {
-        sharedVtx_d[vtxL] = 1;
-        sharedVtx_d[vtxR] = 1;
+        sharedVtx_d[vtxL] = -1;
+        sharedVtx_d[vtxR] = -1;
       }
     }
   };
   Omega_h::parallel_for(mesh.nedges(), markCoreVerts);
-  //count number of neighbor ranks
-  //fill array with ranks of neighbors
+  //create two arrays for core shared vertices: vertex local indices and global ids
+
   //send to neighbors: list of vertex indices and global ids
   //PETSC wants non-owners pointing to owners (their definition of ghosts)
 }
