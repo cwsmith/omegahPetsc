@@ -634,19 +634,19 @@ void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh,
   //create an array for the coordinates of vertices on this rank
   auto coords = mesh.coords();
   Omega_h::Write<Omegah::Real> vtxCoords_d(numCoreVertices*2);
-  Omega_h::Write<Omegah::Real> vtxMap_d(numCoreVertices);
+  Omega_h::Write<Omegah::Real> vtxMap_wd(numCoreVertices);
   Omega_h::Write<Omegah::LO> vtxIdx(1,0);
   const auto getCoordinatesAndMap = OMEGA_H_LAMBDA(Omega_h::LO vtx) {
     if ( isCoreVtx[vtx] ) {
       const auto idx = Kokkos::atomic_fetch_add(&(vtxIdx[0]), 1); 
-      vtxMap_d[vtx] = idx;
+      vtxMap_wd[vtx] = idx;
       vtxCoords_d[idx*2] = coords[vtx*2];
       vtxCoords_d[idx*2+1] = coords[vtx*2+1];
     }
   };
   Omega_h::parallel_for(mesh.nverts(), getCoordinatesAndMap);
   vertexCoords = vtxCoords_d;
-  vtxMap_d = vtxMap_d;
+  vtxMap_d = vtxMap_wd;
 }
 
 // The boundary of the core needs to have links between the 
