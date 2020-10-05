@@ -602,24 +602,19 @@ void getPicPartCoreElmToVtxArray(Omega_h::Mesh &mesh, int& numCells, std::vector
 
 //petsc needs an array of vertex coordinates for all vertices in the core on
 //this process
-//FIXME the implementation below is not including shared vertices (not owned
-//by this rank) in the coordinates array
 void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh,
-    int& numVertices, int& numOwnedVertices,
+    int& numCoreVertices, int& numOwnedVertices,
     Omega_h::HostRead<Omega_h::Real>& vertexCoords,
-    Omega_h::Read<Omega_h::LO>& vtxMap) {
+    Omega_h::Read<Omega_h::LO>& vtxMap_d) {
   const int rank = mesh.comm()->rank();
   //read tag placed by pumipic that defines which process owns each vertex
-  //the inner-most boundary of the core is owned by rank-1, all other vertices
-  //bounding elements classified on the core geometric model faces are owned
-  //by rank
   vtxOwnership_d = mesh.get_array<Omega_h::LO>(0, "ownership");
   Kokkos::parallel_reduce(vtxOwnership_d.size(), OMEGA_H_LAMBDA(const int i, Omega_h::LO& lsum) {
     lsum += (vtxOwnership_d[i] == rank);
   }, numOwnedVertices);
   assert(numOwnedVertices < mesh.nverts());
   //for each element owned by this rank mark the vertices bound by it as owned
-  const Omega_h::Write<Omega_h::LO> isCoreVtx(mesh.nverts());
+  const Omega_h::Write<Omega_h::LO> isCoreVtx(mesh.nverts(),0);
   const auto elms2verts_d = mesh.ask_elem_verts();
   const auto elmOwnership_d = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
   const auto markCoreVerts = OMEGA_H_LAMBDA(Omega_h::LO elm) {
@@ -635,23 +630,23 @@ void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh,
   // get the total number of vertices bound by core elements
   Kokkos::parallel_reduce(mesh.nverts(), OMEGA_H_LAMBDA(const int i, Omega_h::LO& lsum) {
     lsum += isCoreVtx[i];
-  }, numOwnedVertices);
+  }, numCoreVertices);
   //create an array for the coordinates of vertices on this rank
   auto coords = mesh.coords();
-  Omega_h::Write<Omegah::Real> vtxCoords_d(numOwnedVertices*2);
-  Omega_h::Write<Omegah::Real> vtxMap_d(numOwnedVertices);
-  Omega_h::Write<Omegah::LO> vtxIdx(1);
-  const auto getCoordinates = OMEGA_H_LAMBDA(Omega_h::LO vtx) {
-    if ( isCoreVtx[vtx] = 1 ) {
+  Omega_h::Write<Omegah::Real> vtxCoords_d(numCoreVertices*2);
+  Omega_h::Write<Omegah::Real> vtxMap_d(numCoreVertices);
+  Omega_h::Write<Omegah::LO> vtxIdx(1,0);
+  const auto getCoordinatesAndMap = OMEGA_H_LAMBDA(Omega_h::LO vtx) {
+    if ( isCoreVtx[vtx] ) {
       const auto idx = Kokkos::atomic_fetch_add(&(vtxIdx[0]), 1); 
       vtxMap_d[vtx] = idx;
       vtxCoords_d[idx*2] = coords[vtx*2];
       vtxCoords_d[idx*2+1] = coords[vtx*2+1];
     }
   };
-  Omega_h::parallel_for(mesh.nverts(), getCoordinates);
+  Omega_h::parallel_for(mesh.nverts(), getCoordinatesAndMap);
   vertexCoords = vtxCoords_d;
-  vtxMap = vtxMap_d;
+  vtxMap_d = vtxMap_d;
 }
 
 // The boundary of the core needs to have links between the 
