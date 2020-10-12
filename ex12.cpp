@@ -683,63 +683,71 @@ void getPicPartCoreVtxOwnerRanks(Omega_h::mesh,
 // partvtx2corevtx_rd (in) map from vertices in the picpart to their indices
 //                        within the core,
 //                        vtxMap[i] >= 0 if vtx i is in the core, = -1 otherwise
-// coreVtxOwnRank_rd (in) process id that owns each vertex within the core
 // coreVtxOwnIdx_rd (inOut) index on the local or remote process for each vertex 
 //                      within the core
 //
 void getPicPartCoreVtxOwnerIdx(Omega_h::mesh &mesh,
-    const int numCoreVerts,
+    const int numCoreVerts, const int numCoreOwnedVerts, const int numCoreElms,
     Omega_h::Read<Omega_h::LO>& partvtx2corevtx_rd,
-    Omega_h::Read<Omega_h::I32>& coreVtxOwnRank_rd,
-    Omega_h::Read<Omega_h::LO>& coreVtxOwnIdx_rd) {
+    Omega_h::HostRead<Omega_h::LO>& ghostOwnerRank_rh,
+    Omega_h::HostRead<Omega_h::LO>& ghostOwnerIdx_rh) {
   const int self = mesh.comm()->rank();
+  const int numCoreGhostVerts = numCoreVerts - numCoreOwnedVerts;
+  assert(numCoreGhostVerts >=0);
   const auto vtxOwner_d = mesh.get_array<Omega_h::LO>(0, "ownership");
-  Omega_h::Write<Omega_h::GO> coreVtxGid_d(numCoreVerts);
-  Omega_h::Write<Omega_h::LO> coreVtxLid_d(numCoreVerts);
   const auto vtxGids_d = mesh.get_array<Omega_h::GO>(0, "gids");
-  const auto getCoreVtxGids = OMEGA_H_LAMBDA(Omega_h::LO i) {
+  Omega_h::Write<Omega_h::LO> coreVtx2ghostVtx_d(numCoreVerts, -1);
+  Omega_h::Write<Omega_h::LO> ghostVtx2coreVtx_d(numCoreGhostVerts);
+  Omega_h::Write<Omega_h::GO> ghostVtxGid_d(numCoreGhostVerts);
+  Omega_h::Write<Omega_h::I32> ghostVtxOwner_d(numCoreGhostVerts);
+  Omega_h::Write<Omegah::LO> ghostIdx(1,0);
+  const auto getGhostVtxInfo = OMEGA_H_LAMBDA(Omega_h::LO i) {
     const auto coreIdx = partvtx2corevtx_rd[i];
-    if ( coreIdx >= 0 ) { // in the core
-      assert(coreIdx < numCoreVerts);
-      coreVtxGid_d[coreIdx] = vtxGids_d[i];
-      coreVtxLid_d[coreIdx] = coreIdx;
+    if ( coreIdx >= 0 && vtxOwner_d[i] != self ) { // in the core and not owned
+      const auto idx = Kokkos::atomic_fetch_add(&(ghostIdx[0]), 1); 
+      coreVtx2ghostVtx_d[coreIdx] = idx;
+      ghostVtx2coreVtx_d[idx] = coreIdx;
+      ghostVtxGid_d[idx] = vtxGids_d[i];
+      ghostVtxOwner_d[idx] = vtxOwner_d[i];
     }
   };
-  Omega_h::parallel_for(mesh.nverts(), getCoreVtxGids);
+  Omega_h::parallel_for(mesh.nverts(), getGhostVtxInfo);
 
   Omega_h::Dist dist;
   dist.set_parent_comm(mesh.comm());
-  Omega_h::GOs coreVtxGid_rd(coreVtxGid_d);
-  Omega_h::LOs coreVtxLid_rd(coreVtxLid_d);
-  dist.set_dest_ranks(coreVtxOwnRank_rd);
-  dist.set_dest_globals(coreVtxGid_rd);
+  Omega_h::GOs ghostVtxGid_rd(ghostVtxGid_d);
+  dist.set_dest_ranks(ghostVtxOwner_rd);
+  dist.set_dest_globals(ghostVtxGid_rd);
   //non-owners send GID (and local idx) to owners - owners don't know
   //which ranks have ghosts.
-  const auto inGid = dist.exch(coreVtxGid_rd,1); //global id of vtx
+  const auto inGid = dist.exch(ghostVtxGid_rd,1); //global id of vtx
   const auto distInv = dist.invert();
   const auto inRmts = distInv.items2dest();
   const auto inRank = inRmts.ranks; //source rank of vtx info
   const auto inIdx = inRmts.idxs; //source index of vtx info
 
-  const auto getCoreVtxOwnIdx = OMEGA_H_LAMBDA(Omega_h::LO i) {
-    const auto gid = inGid[i];
-    const auto rank = inRank[i];
-    const auto idx = inIdx[i];
-    //If the incoming vtx info was not a self send then it
-    //  is coming from a remote and I am the owner of the vtx.
-    //  The GID of the vtx is 'gid' and its index in the core
-    //  vtx array on the non-owner process is 'idx'.
-    //  To store 'idx' I need to know which local vtx it maps to.
-    if ( rank == self ) {
-    }
+  //find the vertex with global id 'inGid' in the local core vertex array
+  //and send its local index to the remote process
+  Omega_h::Write<Omega_h::LO> ownerIdx_d(inGid.size());
+  const auto numGhostsReceived = inGid.size();
+  const auto findIdxOfGid = OMEGA_H_LAMBDA(Omega_h::LO i) {
     const auto coreIdx = partvtx2corevtx_rd[i];
-    if ( coreIdx >= 0 ) { // in the core
-      assert(coreIdx < numCoreVerts);
-      coreVtxGid_d[coreIdx] = vtxGids_d[i];
-      coreVtxLid_d[coreIdx] = coreIdx;
+    const auto vtxGid = vtxGids_d[i];
+    //look for ghosts with matching Gids, there is no race condition
+    //since each vtx can appear exactly once in the local picpart mesh
+    for(int j=0; j<=numGhostsReceived; j++) {
+      //TODO move conditional outside the loop to minimize divergence
+      if ( vtxGid == inGid[j] ) {
+        ownerIdx_d[j] = numCoreElms + coreIdx; //PETSC_NEEDS_4A
+      }
     }
   };
-  Omega_h::parallel_for(inGid.size(), getCoreVtxOwnIdx);
+  Omega_h::parallel_for(mesh.nverts(), getGhostVtxInfo);
+
+  Omega_h::LOs ownerIdx_rd(ownerIdx_d);
+  const auto ghostOwnerIdx_rd = distInv.exch(ownerIdx_d,1);
+  Omega_h::HostRead<Omega_h::LO> ghostOwnerIdx_rh(ghostOwnerIdx_rd);
+  Omega_h::HostRead<Omega_h::LO> ghostOwnerRank_rh(ghostVtxOwner_d);
 }
 
 void getPtnMeshElmToVtxArray(Omega_h::Mesh &mesh, std::vector<int>& global_cell) {
@@ -804,7 +812,6 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   {
     int numCoreElms;
     getPicPartCoreElmToVtxArray(mesh, numCoreElms, global_cell);
-    numCells = numCoreElms;
     //PETSC_NEEDS_1 - 'vertexCoords'
     int numCoreVerts;
     int numOwnedCoreVerts;
@@ -813,13 +820,29 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     numOwnedVertices = numOwnedCoreVerts;
     MPI_Allreduce(&numOwnedVertices, &numGlobalVerts, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
     Omega_h::Read<Omega_h::I32> coreVtxOwnRank;
-    getPicPartCoreVtxOwnerRanks(mesh, numVertices, partvtx2corevtx, coreVtxOwnRank);
+    getPicPartCoreVtxOwnerRanks(mesh, numCoreVertices, partvtx2corevtx, coreVtxOwnRank);
     Omega_h::Read<Omega_h::LO> coreVtxOwnIdx;
-    getPicPartCoreVtxOwnerIdx(mesh, numCoreVerts, partvtx2corevtx,
-        coreVtxOwnRank, coreVtxOwnIdx);
-    const int numCoreRmtVtx = numCoreVerts - numOwnedCoreVerts;
     //PETSC_NEEDS_4A - 'vtxRemoteIdx'
+    Omega_h::HostRead<Omega_h::LO> ghostOwnerRank_rh;
+    Omega_h::HostRead<Omega_h::LO> ghostOwnerIdx_rh;
+    PetscSFNode *remoteVertex;
+    ierr = PetscMalloc2(numVerticesGhost, &localVertex);CHKERRQ(ierr);
+    ierr = PetscMalloc1(numVerticesGhost, &remoteVertex);CHKERRQ(ierr);
+    getPicPartCoreVtxOwnerIdx(mesh, numCoreVerts, numOwnedCoreVerts, numCoreElms,
+        partvtx2corevtx, ghostOwnerRank_rh, ghostOwnerIdx_rh);
+    const int numCoreRmtVtx = numCoreVerts - numOwnedCoreVerts;
     //PETSC_NEEDS_4B - 'vtxRemoteRank'
+    //create a plex object on each process from local info
+    ierr = DMPlexCreateFromCellListPetsc(comm, dim, numCoreElms, 
+        numCoreVertices, numVertsPerTri, PETSC_FALSE, global_cell.data(),
+        dim, vertexCoords.data(), dm); CHKERRQ(ierr);
+
+
+    PetscSF pointSF;
+    ierr = DMGetPointSF(*dm, &pointSF);CHKERRQ(ierr);
+    ierr = PetscSFSetGraph(pointSF, numCoreElms+numCoreVertices, numVerticesGhost,
+        localVertex, PETSC_OWN_POINTER, remoteVertex, PETSC_OWN_POINTER);CHKERRQ(ierr);
+
   }
   else //partitioned omegah mesh
   {
@@ -835,21 +858,48 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
         (nborRanks.size() == nborElmCnts.size()) );
     vtxRemoteRank = mesh.ask_owners(0).ranks;
     vtxRemoteIdx = mesh.ask_owners(0).idxs;
+
+    //PETSC_NEEDS_2 - 'numVerticesGhost'
+    int numVerticesGhost = 0; //vertices that are not owned
+    for (int i = 0; i < vtxRemoteRank.size(); i++) {
+      if (rank != vtxRemoteRank[i])
+        numVerticesGhost++;
+    }
+
+    typedef std::map<int,int> Mi2i;
+    Mi2i nbor2ElmCnt;
+    for(int i = 0; i < nborRanks.size(); i++)
+      nbor2ElmCnt[nborRanks[i]] = nborElmCnts[i];
+
+    //PETSC_NEEDS_3 - 'localVertex'
+    int *localVertex;
+    PetscSFNode *remoteVertex;
+    ierr = PetscMalloc1(numVerticesGhost, &localVertex);CHKERRQ(ierr);
+    ierr = PetscMalloc1(numVerticesGhost, &remoteVertex);CHKERRQ(ierr);
+    for (int i = 0, j = 0; i < vtxRemoteRank.size(); i++)
+    {
+      const auto nborRank= vtxRemoteRank[i];
+      if (rank != nborRank)
+      {
+        localVertex[j] = numCells+i;
+        const auto nborElmCnt = nbor2ElmCnt[nborRank];
+        remoteVertex[j].index = vtxRemoteIdx[i]+nborElmCnt;
+        remoteVertex[j].rank = nborRank;
+        j++;
+      }
+    }
+
+    PetscErrorCode ierr;
+    //create a plex object on each process from local info
+    ierr = DMPlexCreateFromCellListPetsc(comm, dim, numCells, 
+        numVertices, numVertsPerTri, PETSC_FALSE, global_cell.data(),
+        dim, vertexCoords.data(), dm); CHKERRQ(ierr);
+
+    PetscSF pointSF;
+    ierr = DMGetPointSF(*dm, &pointSF);CHKERRQ(ierr);
+    ierr = PetscSFSetGraph(pointSF, numCells+numVertices, numVerticesGhost, localVertex, PETSC_OWN_POINTER, remoteVertex, PETSC_OWN_POINTER);CHKERRQ(ierr);
   }
   assert(vertexCoords.size() == dim*numVertices);
-
-  //PETSC_NEEDS_2 - 'numVerticesGhost'
-  int numVerticesGhost = 0; //vertices that are not owned
-  for (int i = 0; i < vtxRemoteRank.size(); i++) {
-    if (rank != vtxRemoteRank[i])
-      numVerticesGhost++;
-  }
-
-  PetscErrorCode ierr;
-  //create a plex object on each process from local info
-  ierr = DMPlexCreateFromCellListPetsc(comm, dim, numCells, 
-      numVertices, numVertsPerTri, PETSC_FALSE, global_cell.data(),
-      dim, vertexCoords.data(), dm); CHKERRQ(ierr);
 
   const auto debug = options->debug;
   if(debug) {
@@ -861,33 +911,6 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
       MPI_Barrier(comm);
     }
   }
-
-  typedef std::map<int,int> Mi2i;
-  Mi2i nbor2ElmCnt;
-  for(int i = 0; i < nborRanks.size(); i++)
-    nbor2ElmCnt[nborRanks[i]] = nborElmCnts[i];
-
-  //PETSC_NEEDS_3 - 'localVertex'
-  int *localVertex;
-  PetscSFNode *remoteVertex;
-  ierr = PetscMalloc1(numVerticesGhost, &localVertex);CHKERRQ(ierr);
-  ierr = PetscMalloc1(numVerticesGhost, &remoteVertex);CHKERRQ(ierr);
-  for (int i = 0, j = 0; i < vtxRemoteRank.size(); i++)
-  {
-    const auto nborRank= vtxRemoteRank[i];
-    if (rank != nborRank)
-    {
-      localVertex[j] = numCells+i;
-      const auto nborElmCnt = nbor2ElmCnt[nborRank];
-      remoteVertex[j].index = vtxRemoteIdx[i]+nborElmCnt;
-      remoteVertex[j].rank = nborRank;
-      j++;
-    }
-  }
-  
-  PetscSF pointSF;
-  ierr = DMGetPointSF(*dm, &pointSF);CHKERRQ(ierr);
-  ierr = PetscSFSetGraph(pointSF, numCells+numVertices, numVerticesGhost, localVertex, PETSC_OWN_POINTER, remoteVertex, PETSC_OWN_POINTER);CHKERRQ(ierr);
 
   if(debug) {
     PetscSFView(pointSF, PETSC_VIEWER_STDOUT_WORLD);
