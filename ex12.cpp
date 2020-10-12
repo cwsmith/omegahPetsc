@@ -604,8 +604,8 @@ void getPicPartCoreElmToVtxArray(Omega_h::Mesh &mesh, int& numCells, std::vector
 //this process
 void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh,
     int& numCoreVertices, int& numOwnedVertices,
-    Omega_h::HostRead<Omega_h::Real>& vertexCoords,
-    Omega_h::Read<Omega_h::LO>& vtxMap_d) {
+    Omega_h::HostRead<Omega_h::Real>& coreVertexCoords,
+    Omega_h::Read<Omega_h::LO>& partvtx2corevtx_d) {
   const int rank = mesh.comm()->rank();
   //read tag placed by pumipic that defines which process owns each vertex
   vtxOwnership_d = mesh.get_array<Omega_h::LO>(0, "ownership");
@@ -633,20 +633,44 @@ void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh,
   }, numCoreVertices);
   //create an array for the coordinates of vertices on this rank
   auto coords = mesh.coords();
-  Omega_h::Write<Omegah::Real> vtxCoords_d(numCoreVertices*2);
-  Omega_h::Write<Omegah::Real> vtxMap_wd(numCoreVertices);
+  Omega_h::Write<Omegah::Real> coreVtxCoords_d(numCoreVertices*2);
+  Omega_h::Write<Omegah::Real> vtxMap_wd(numCoreVertices,-1);
   Omega_h::Write<Omegah::LO> vtxIdx(1,0);
   const auto getCoordinatesAndMap = OMEGA_H_LAMBDA(Omega_h::LO vtx) {
     if ( isCoreVtx[vtx] ) {
       const auto idx = Kokkos::atomic_fetch_add(&(vtxIdx[0]), 1); 
       vtxMap_wd[vtx] = idx;
-      vtxCoords_d[idx*2] = coords[vtx*2];
-      vtxCoords_d[idx*2+1] = coords[vtx*2+1];
+      coreVtxCoords_d[idx*2] = coords[vtx*2];
+      coreVtxCoords_d[idx*2+1] = coords[vtx*2+1];
     }
   };
   Omega_h::parallel_for(mesh.nverts(), getCoordinatesAndMap);
-  vertexCoords = vtxCoords_d;
-  vtxMap_d = vtxMap_wd;
+  coreVertexCoords = coreVtxCoords_d;
+  partvtx2corevtx_d = vtxMap_wd;
+}
+
+// mesh (in) the picpart mesh
+// numCoreVertices (in) number of vertices in the core on this process/picpart
+// partvtx2corevtx_rd (in) map from vertices in the picpart to their indices
+//                        within the core,
+//                        vtxMap[i] >= 0 if vtx i is in the core, = -1 otherwise
+// coreVtxOwnerRank_rd (inOut) process id that owns each vertex within the core
+void getPicPartCoreVtxOwnerRanks(Omega_h::mesh, 
+    const int numCoreVertices,
+    Omega_h::Read<Omega_h::LO>& partvtx2corevtx_rd,
+    Omega_h::Read<Omega_h::I32>& coreVtxOwnerRank_rd) {
+  const auto vtxOwner_d = mesh.get_array<Omega_h::LO>(0, "ownership");
+  //create the array of owner ranks for the vertices in the core
+  Omega_h::Write<Omegah::LO> coreVtxRanks_d(numCoreVertices,rank);
+  const auto getCoreVtxRanks = OMEGA_H_LAMBDA(Omega_h::LO i) {
+    if ( partvtx2corevtx_rd[i] != -1 ) {
+      const auto coreIdx = partvtx2corevtx_rd[i];
+      assert(coreIdx < numCoreVertices);
+      coreVtxRanks_d[coreIdx] = vtxOwner_d[i];
+    }
+  };
+  Omega_h::parallel_for(mesh.nverts(), getCoreVtxRanks);
+  coreVtxOwnerRank_rd = coreVtxRanks_d;
 }
 
 // The boundary of the core needs to have links between the 
@@ -655,43 +679,67 @@ void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh,
 // being sent to all processes containing non-owner copies of that vtx.
 // Note, the local index must be in the array that petsc gets for local
 // vertices.
-void getPicPartCoreVtxRemotes(Omega_h::mesh, 
-  Omega_h::HostRead<Omega_h::I32>& vtxRemoteRank,
-  Omega_h::HostRead<Omega_h::LO>& vtxRemoteIdx) {
-  const int rank = mesh.comm()->rank();
-  //get array of face owners
-  const auto faceOwner = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
+// numCoreVerts (in) number of vertices in the core on this process/picpart
+// partvtx2corevtx_rd (in) map from vertices in the picpart to their indices
+//                        within the core,
+//                        vtxMap[i] >= 0 if vtx i is in the core, = -1 otherwise
+// coreVtxOwnRank_rd (in) process id that owns each vertex within the core
+// coreVtxOwnIdx_rd (inOut) index on the local or remote process for each vertex 
+//                      within the core
+//
+void getPicPartCoreVtxOwnerIdx(Omega_h::mesh &mesh,
+    const int numCoreVerts,
+    Omega_h::Read<Omega_h::LO>& partvtx2corevtx_rd,
+    Omega_h::Read<Omega_h::I32>& coreVtxOwnRank_rd,
+    Omega_h::Read<Omega_h::LO>& coreVtxOwnIdx_rd) {
+  const int self = mesh.comm()->rank();
   const auto vtxOwner_d = mesh.get_array<Omega_h::LO>(0, "ownership");
-  //get edges-to-faces
-  const auto edges2faces = mesh.ask_up(Omega_h::EDGE, o::FACE);
-  auto e2f_vals = edges2faces.ab2b; // CSR value array
-  auto e2f_offsets = edges2faces.a2ab; // CSR offset array, index by mesh edge ids
-  const auto edges2verts = mesh.ask_down(o::EDGE, o::VERT);
-  Omega_h::Write<Omegah::LO> sharedVtxRemoteRank_d(mesh.nverts(),rank);
-  //loop over edges and count vertices that are on the boundary of the core -
-  //they have an two adjacent faces and one has this rank as the owner
-  const auto markSharedVtx = OMEGA_H_LAMBDA(Omega_h::LO i) {
-    const auto first = e2f_offsets[i];
-    const auto last = e2f_offsets[i+1];
-    const auto deg = last-first;
-    if ( deg == 2 ) { 
-      const auto faceL = e2f_vals[first];
-      const auto faceR = e2f_vals[first+1];
-      const auto vtxL = edges2verts[i*2];
-      const auto vtxR = edges2verts[i*2+1];
-      const auto isShared = (faceOwner[faceL] == rank && faceOwner[faceR] != rank) ||
-                            (faceOwner[faceR] == rank && faceOwner[faceL] != rank);
-      if( isShared ) {
-        sharedVtx_d[vtxL] = -1;
-        sharedVtx_d[vtxR] = -1;
-      }
+  Omega_h::Write<Omega_h::GO> coreVtxGid_d(numCoreVerts);
+  Omega_h::Write<Omega_h::LO> coreVtxLid_d(numCoreVerts);
+  const auto vtxGids_d = mesh.get_array<Omega_h::GO>(0, "gids");
+  const auto getCoreVtxGids = OMEGA_H_LAMBDA(Omega_h::LO i) {
+    const auto coreIdx = partvtx2corevtx_rd[i];
+    if ( coreIdx >= 0 ) { // in the core
+      assert(coreIdx < numCoreVerts);
+      coreVtxGid_d[coreIdx] = vtxGids_d[i];
+      coreVtxLid_d[coreIdx] = coreIdx;
     }
   };
-  Omega_h::parallel_for(mesh.nedges(), markCoreVerts);
-  //create two arrays for core shared vertices: vertex local indices and global ids
+  Omega_h::parallel_for(mesh.nverts(), getCoreVtxGids);
 
-  //send to neighbors: list of vertex indices and global ids
-  //PETSC wants non-owners pointing to owners (their definition of ghosts)
+  Omega_h::Dist dist;
+  dist.set_parent_comm(mesh.comm());
+  Omega_h::GOs coreVtxGid_rd(coreVtxGid_d);
+  Omega_h::LOs coreVtxLid_rd(coreVtxLid_d);
+  dist.set_dest_ranks(coreVtxOwnRank_rd);
+  dist.set_dest_globals(coreVtxGid_rd);
+  //non-owners send GID (and local idx) to owners - owners don't know
+  //which ranks have ghosts.
+  const auto inGid = dist.exch(coreVtxGid_rd,1); //global id of vtx
+  const auto distInv = dist.invert();
+  const auto inRmts = distInv.items2dest();
+  const auto inRank = inRmts.ranks; //source rank of vtx info
+  const auto inIdx = inRmts.idxs; //source index of vtx info
+
+  const auto getCoreVtxOwnIdx = OMEGA_H_LAMBDA(Omega_h::LO i) {
+    const auto gid = inGid[i];
+    const auto rank = inRank[i];
+    const auto idx = inIdx[i];
+    //If the incoming vtx info was not a self send then it
+    //  is coming from a remote and I am the owner of the vtx.
+    //  The GID of the vtx is 'gid' and its index in the core
+    //  vtx array on the non-owner process is 'idx'.
+    //  To store 'idx' I need to know which local vtx it maps to.
+    if ( rank == self ) {
+    }
+    const auto coreIdx = partvtx2corevtx_rd[i];
+    if ( coreIdx >= 0 ) { // in the core
+      assert(coreIdx < numCoreVerts);
+      coreVtxGid_d[coreIdx] = vtxGids_d[i];
+      coreVtxLid_d[coreIdx] = coreIdx;
+    }
+  };
+  Omega_h::parallel_for(inGid.size(), getCoreVtxOwnIdx);
 }
 
 void getPtnMeshElmToVtxArray(Omega_h::Mesh &mesh, std::vector<int>& global_cell) {
@@ -740,22 +788,38 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   MPI_Comm_size(comm, &commSize);
 
   const int dim = mesh.dim();
-  int numVertices;
-  int numOwnedVertices;
-  int numGlobalVerts;
-  int numCells;
+  int numVertices; //TODO  'ptscNumVerts'
+  int numOwnedVertices; //TODO 'ptscNumOwnedVerts'
+  int numGlobalVerts; //TODO 'ptscNumGlobVerts'
+  int numCells; //TODO 'ptscNumCells'
   std::vector<int> global_cell;
-  Omega_h::HostRead<Omega_h::Real> vertexCoords;
-  Omega_h::HostRead<Omega_h::GO> global_vertex;
-  Omega_h::Read<Omega_h::LO> vtxMap;
-  Omega_h::HostRead<Omega_h::I32> vtxRemoteRank;
-  Omega_h::HostRead<Omega_h::LO> vtxRemoteIdx;
+  Omega_h::HostRead<Omega_h::Real> vertexCoords; //TODO 'ptscVtxCoords'
+  Omega_h::HostRead<Omega_h::GO> global_vertex; //TODO 'ptscElm2Vtx'
+  Omega_h::Read<Omega_h::LO> partvtx2corevtx;
+  Omega_h::HostRead<Omega_h::I32> vtxRemoteRank; //TODO 'ptscVtxRmtRank'
+  Omega_h::HostRead<Omega_h::LO> vtxRemoteIdx; //TODO 'ptscVtxRmtIdx'
+  Omega_h::Read<int> nborRanks;
+  Omega_h::Read<int> nborElmCnts;
   if (strcmp(options->mesh_type, "picpart") == 0)
   {
-    getPicPartCoreElmToVtxArray(mesh, numCells, global_cell);
-    getPicPartCoreVtxCoords(mesh, numVertices, numOwnedVertices, vertexCoords, vtxMap);
+    int numCoreElms;
+    getPicPartCoreElmToVtxArray(mesh, numCoreElms, global_cell);
+    numCells = numCoreElms;
+    //PETSC_NEEDS_1 - 'vertexCoords'
+    int numCoreVerts;
+    int numOwnedCoreVerts;
+    getPicPartCoreVtxCoords(mesh, numCoreVerts, numOwnedCoreVerts, vertexCoords, partvtx2corevtx);
+    numVertices = numCoreVerts;
+    numOwnedVertices = numOwnedCoreVerts;
     MPI_Allreduce(&numOwnedVertices, &numGlobalVerts, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
-    getPicPartCoreVtxRemotes(mesh, vtxRemoteRank, vtxRemoteIdx);
+    Omega_h::Read<Omega_h::I32> coreVtxOwnRank;
+    getPicPartCoreVtxOwnerRanks(mesh, numVertices, partvtx2corevtx, coreVtxOwnRank);
+    Omega_h::Read<Omega_h::LO> coreVtxOwnIdx;
+    getPicPartCoreVtxOwnerIdx(mesh, numCoreVerts, partvtx2corevtx,
+        coreVtxOwnRank, coreVtxOwnIdx);
+    const int numCoreRmtVtx = numCoreVerts - numOwnedCoreVerts;
+    //PETSC_NEEDS_4A - 'vtxRemoteIdx'
+    //PETSC_NEEDS_4B - 'vtxRemoteRank'
   }
   else //partitioned omegah mesh
   {
@@ -766,11 +830,15 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     numVertices = mesh.nverts();
     numCells = mesh.nelems();
     vertexCoords = mesh.coords();
+    getNeighborElmCounts(mesh, nborRanks, nborElmCnts, debug);
+    assert( nborRanks.size() > 0 &&
+        (nborRanks.size() == nborElmCnts.size()) );
     vtxRemoteRank = mesh.ask_owners(0).ranks;
     vtxRemoteIdx = mesh.ask_owners(0).idxs;
   }
   assert(vertexCoords.size() == dim*numVertices);
 
+  //PETSC_NEEDS_2 - 'numVerticesGhost'
   int numVerticesGhost = 0; //vertices that are not owned
   for (int i = 0; i < vtxRemoteRank.size(); i++) {
     if (rank != vtxRemoteRank[i])
@@ -794,16 +862,12 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     }
   }
 
-  Omega_h::Read<int> nborRanks;
-  Omega_h::Read<int> nborElmCnts;
-  getNeighborElmCounts(mesh, nborRanks, nborElmCnts, debug);
-  assert( nborRanks.size() > 0 &&
-         (nborRanks.size() == nborElmCnts.size()) );
   typedef std::map<int,int> Mi2i;
   Mi2i nbor2ElmCnt;
   for(int i = 0; i < nborRanks.size(); i++)
     nbor2ElmCnt[nborRanks[i]] = nborElmCnts[i];
 
+  //PETSC_NEEDS_3 - 'localVertex'
   int *localVertex;
   PetscSFNode *remoteVertex;
   ierr = PetscMalloc1(numVerticesGhost, &localVertex);CHKERRQ(ierr);
