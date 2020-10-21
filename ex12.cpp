@@ -518,6 +518,32 @@ static PetscErrorCode CreateBCLabel(DM dm, const char name[])
   PetscFunctionReturn(0);
 }
 
+static MPI_Comm MST_communicator(MPI_Comm comm, int &exclude_proc, int &commSize)
+{
+  // Gather all the excluded process id onto all ranks
+  int exclude_proc_array[commSize];
+  MPI_Allgather(&exclude_proc, 1, MPI_INT, exclude_proc_array, 1, MPI_INT, comm);
+
+  std::vector<int> exclude_proc_vector(exclude_proc_array, 
+                    exclude_proc_array + sizeof(exclude_proc_array)/sizeof(exclude_proc_array[0]));
+  
+  // Erase the process ids that doesn't need to be excluded
+  exclude_proc_vector.erase(std::remove(exclude_proc_vector.begin(), exclude_proc_vector.end(), -1), 
+                            exclude_proc_vector.end());
+
+  MPI_Group world_group;
+  MPI_Comm_group(comm, &world_group);
+
+  // Remove all unnecessary ranks
+  MPI_Group MST_group;
+  MPI_Group_excl(world_group, exclude_proc_vector.size(), exclude_proc_vector.data(), &MST_group);
+
+  MPI_Comm MST_comm;
+  MPI_Comm_create(comm, MST_group, &MST_comm);
+
+  return MST_comm;
+}
+
 static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
 {
   assert(options->dim == 2);
@@ -545,22 +571,15 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   Omega_h::Read<Omega_h::LO> ownership_elem;
   Omega_h::Read<Omega_h::LO> ownership_vert;
   int current_max_class_id; // Keep track of the current highest class id of the selected picparts
-  std::vector<int> exclude_proc; // The process ids to disable
-  // The first picpart is always used
-  if (rank == 0)
-  {
-    ownership_elem = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
-    ownership_vert = mesh.get_array<Omega_h::LO>(0, "ownership");
-    current_max_class_id = max_class_id;
-  }
-  MPI_Bcast(&current_max_class_id, 1, MPI_INT, 0, MPI_COMM_WORLD);
+  int exclude_proc = -1; // Not disabled processes have -1
 
-  for (int i = 1; i < commSize; i++)
+  for (int i = 0; i < commSize; i++)
   {
     if (rank == i)
     {
-      // If this picpart matches with the previously selected picparts
-      if (min_class_id == current_max_class_id + 1)
+      // If this picpart does not intersect with the previously selected picparts
+      // Always use the first picpart
+      if (min_class_id == current_max_class_id + 1 || rank == 0)
       {
         ownership_elem = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
         ownership_vert = mesh.get_array<Omega_h::LO>(0, "ownership");
@@ -568,7 +587,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
       }
       else
       {
-        exclude_proc.push_back(i);
+        exclude_proc = i;
       }
     }
     MPI_Bcast(&current_max_class_id, 1, MPI_INT, i, MPI_COMM_WORLD);
@@ -577,42 +596,38 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   // Get the vertices to cell adjacency
   Omega_h::Read<Omega_h::LO> cell = mesh.ask_elem_verts();
 
-  Omega_h::Read<Omega_h::Real> vertexCoords = mesh.coords();
-
-  std::vector<int> core_cell(cell.size());
-
   // Change the local to global vertex id for adjacency
+  std::vector<int> core_cell(cell.size());
   Omega_h::Read<long> global_vertex = mesh.get_array<long>(0, "gids");
   for (int i = 0; i < cell.size(); i++)
   {
     core_cell[i] = global_vertex[cell[i]];
   }
 
-  // Use the last picpart to cover the remaining part of the mesh
-  if (rank == commSize - 1)
+  // Use the last picpart to add the remaining part of the mesh if needed
+  if (rank == commSize - 1 && current_max_class_id != max_class_id)
   {
-    if (current_max_class_id != max_class_id)
-    {
-      ownership_elem = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
-      ownership_vert = mesh.get_array<Omega_h::LO>(0, "ownership");
+    ownership_elem = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
+    ownership_vert = mesh.get_array<Omega_h::LO>(0, "ownership");
 
-      for (int i = 0; i < class_id_elem.size(); i++)
+    for (int i = 0; i < class_id_elem.size(); i++)
+    {
+      // Erase the overlap between last picpart and the currrent mesh
+      if (class_id_elem[i] <= current_max_class_id)
       {
-        // Erase the overlap between last picpart and the currrent mesh
-        if (class_id_elem[i] <= current_max_class_id)
-        {
-          core_cell.erase(core_cell.begin() + 3*i);
-          core_cell.erase(core_cell.begin() + 3*i+1);
-          core_cell.erase(core_cell.begin() + 3*i+2);
-        }
-        
+        core_cell.erase(core_cell.begin() + 3*i);
+        core_cell.erase(core_cell.begin() + 3*i+1);
+        core_cell.erase(core_cell.begin() + 3*i+2);
       }
-      // No longer disabling the last process
-      exclude_proc.erase(std::remove(exclude_proc.begin(), exclude_proc.end(), rank), exclude_proc.end());
+      
     }
-    
+    // No longer disabling the last process
+    exclude_proc = -1;
   }
 
+  MPI_Comm MST_comm = MST_communicator(comm, exclude_proc, commSize);
+
+  Omega_h::Read<Omega_h::Real> vertexCoords = mesh.coords();
   int numOwnedVertices = mesh.nverts();
   int numCells = mesh.nelems();
   if (rank == commSize - 1)
@@ -621,30 +636,15 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     numCells = core_cell.size()/3;
   }
 
-  // Obtain the group of processes in the world communicator
-  MPI_Group world_group;
-  MPI_Comm_group(comm, &world_group);
-
-  // Remove all unnecessary ranks
-  MPI_Group new_group;
-  MPI_Group_excl(world_group, exclude_proc.size(), exclude_proc.data(), &new_group);
-
-  // Create a new communicator
-  MPI_Comm newworld;
-  MPI_Comm_create(comm, new_group, &newworld);
-
-  if (newworld == MPI_COMM_NULL)
+  if (MST_comm != MPI_COMM_NULL)
   {
-    MPI_Finalize();
-    exit(0);
-  }
-
-  comm = newworld;
-
-  printf("rank: %d, numCells: %d, numVertices: %d\n", rank, numCells, numOwnedVertices);
-  fprintf(stderr, "rank: %d, Min(GlobalVtxId): %d, Max(GlobalVtxId): %d\n", rank, 
+    fprintf(stderr, "rank: %d, numCells: %d, numVertices: %d\n", rank, numCells, numOwnedVertices);
+    fprintf(stderr, "rank: %d, Min(GlobalVtxId): %d, Max(GlobalVtxId): %d\n", rank, 
           *std::min_element(core_cell.begin(), core_cell.end()), 
           *std::max_element(core_cell.begin(), core_cell.end()));
+  }
+  
+  MPI_Barrier(comm);
   exit(0);
 
   // create the linear uniform partition of vertex coordinates
