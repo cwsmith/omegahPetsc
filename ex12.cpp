@@ -521,11 +521,10 @@ static PetscErrorCode CreateBCLabel(DM dm, const char name[])
 static MPI_Comm MST_communicator(MPI_Comm comm, int &exclude_proc, int &commSize)
 {
   // Gather all the excluded process id onto all ranks
-  int exclude_proc_array[commSize];
+  int* exclude_proc_array = new int [commSize];
   MPI_Allgather(&exclude_proc, 1, MPI_INT, exclude_proc_array, 1, MPI_INT, comm);
 
-  std::vector<int> exclude_proc_vector(exclude_proc_array, 
-                    exclude_proc_array + sizeof(exclude_proc_array)/sizeof(exclude_proc_array[0]));
+  std::vector<int> exclude_proc_vector(exclude_proc_array, exclude_proc_array + commSize);
   
   // Erase the process ids that doesn't need to be excluded
   exclude_proc_vector.erase(std::remove(exclude_proc_vector.begin(), exclude_proc_vector.end(), -1), 
@@ -540,6 +539,8 @@ static MPI_Comm MST_communicator(MPI_Comm comm, int &exclude_proc, int &commSize
 
   MPI_Comm MST_comm;
   MPI_Comm_create(comm, MST_group, &MST_comm);
+
+  delete[] exclude_proc_array;
 
   return MST_comm;
 }
@@ -579,7 +580,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     {
       // If this picpart does not intersect with the previously selected picparts
       // Always use the first picpart
-      if (min_class_id == current_max_class_id + 1 || rank == 0)
+      if (min_class_id > current_max_class_id || rank == 0)
       {
         ownership_elem = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
         ownership_vert = mesh.get_array<Omega_h::LO>(0, "ownership");
@@ -590,7 +591,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
         exclude_proc = i;
       }
     }
-    MPI_Bcast(&current_max_class_id, 1, MPI_INT, i, MPI_COMM_WORLD);
+    MPI_Bcast(&current_max_class_id, 1, MPI_INT, i, comm);
   }
 
   // Get the vertices to cell adjacency
@@ -610,14 +611,15 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     ownership_elem = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
     ownership_vert = mesh.get_array<Omega_h::LO>(0, "ownership");
 
-    for (int i = 0; i < class_id_elem.size(); i++)
+    // The erase is backwards to maintain the order of indexing
+    for (int i = class_id_elem.size()-1; i >= 0; i--)
     {
       // Erase the overlap between last picpart and the currrent mesh
       if (class_id_elem[i] <= current_max_class_id)
       {
-        core_cell.erase(core_cell.begin() + 3*i);
-        core_cell.erase(core_cell.begin() + 3*i+1);
         core_cell.erase(core_cell.begin() + 3*i+2);
+        core_cell.erase(core_cell.begin() + 3*i+1);
+        core_cell.erase(core_cell.begin() + 3*i);
       }
       
     }
@@ -626,151 +628,186 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   }
 
   MPI_Comm MST_comm = MST_communicator(comm, exclude_proc, commSize);
+  int MST_rank, MST_commSize;
+  MPI_Comm_rank(MST_comm, &MST_rank);
+  MPI_Comm_size(MST_comm, &MST_commSize);
 
-  Omega_h::Read<Omega_h::Real> vertexCoords = mesh.coords();
-  int numOwnedVertices = mesh.nverts();
-  int numCells = mesh.nelems();
-  if (rank == commSize - 1)
-  {
-    numOwnedVertices = std::set<int>(core_cell.begin(), core_cell.end()).size();
-    numCells = core_cell.size()/3;
-  }
-
+  //Temporary to test the solver
+  // comm = MST_comm; 
+  // if (MST_comm == MPI_COMM_NULL)
+  // {
+  //   MPI_Finalize();
+  //   exit(0);
+  // }
+  
   if (MST_comm != MPI_COMM_NULL)
   {
+    Omega_h::Read<Omega_h::Real> vertexCoords = mesh.coords();
+   
+    int numOwnedVertices = 0;
+    int numCells = mesh.nelems();
+    int max_rank = *std::max_element(ownership_elem.data(), ownership_elem.data()+ownership_elem.size());
+    int min_rank = *std::min_element(ownership_elem.data(), ownership_elem.data()+ownership_elem.size());
+    if (rank != commSize-1)
+    {
+      for (int i = min_rank; i <= max_rank; i++)
+      {
+        numOwnedVertices += std::count(ownership_vert.data(), ownership_vert.data()+ownership_vert.size(), i);
+      }
+    }
+    else
+    {
+      for (int i = current_max_class_id+1; i <= max_class_id; i++)
+      {
+        int min_rank_elem_index = std::distance(class_id_elem.begin(), 
+                      std::find(class_id_elem.begin(), class_id_elem.end(), i));
+        if (min_rank_elem_index != class_id_elem.size())
+        {
+          min_rank = ownership_elem[min_rank_elem_index];
+        
+          for (int i = min_rank; i <= max_rank; i++)
+          {
+            numOwnedVertices += std::count(ownership_vert.data(), 
+                                ownership_vert.data()+ownership_vert.size(), i);
+          }
+          break;
+        }
+        
+      }
+    
+      numCells = core_cell.size()/3;
+    }
+
     fprintf(stderr, "rank: %d, numCells: %d, numVertices: %d\n", rank, numCells, numOwnedVertices);
     fprintf(stderr, "rank: %d, Min(GlobalVtxId): %d, Max(GlobalVtxId): %d\n", rank, 
           *std::min_element(core_cell.begin(), core_cell.end()), 
           *std::max_element(core_cell.begin(), core_cell.end()));
-  }
-  
-  MPI_Barrier(comm);
-  exit(0);
 
-  // create the linear uniform partition of vertex coordinates
-  // based on global vertex id
-  int numGlobalVerts;
-  MPI_Allreduce(&numOwnedVertices, &numGlobalVerts, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD); 
-  int vertsPerRank = numGlobalVerts/commSize;
-  int remainingVerts = numGlobalVerts % commSize;
-  int numLocalVerts = vertsPerRank;
-  if (rank == commSize-1) 
-    numLocalVerts += remainingVerts; 
+    // create the linear uniform partition of vertex coordinates
+    // based on global vertex id
+    int numGlobalVerts;
+    MPI_Allreduce(&numOwnedVertices, &numGlobalVerts, 1, MPI_INT, MPI_SUM, MST_comm); 
+    int vertsPerRank = numGlobalVerts/MST_commSize;
+    int remainingVerts = numGlobalVerts % MST_commSize;
+    int numLocalVerts = vertsPerRank;
+    if (MST_rank == MST_commSize-1) 
+      numLocalVerts += remainingVerts; 
 
-  MPI_Request* recvReqs = (MPI_Request*) malloc(sizeof(MPI_Request)*numLocalVerts);
-  double* recvIdsAndCoords = new double[numLocalVerts*3];
-  for (int i = 0; i < numLocalVerts; i++) 
-  {
-    MPI_Irecv(&recvIdsAndCoords[i*3], 3, MPI_DOUBLE, MPI_ANY_SOURCE, MPI_ANY_TAG, comm, &recvReqs[i]);
-  }
-
-  Omega_h::Write<Omega_h::GO> destRanks(mesh.nverts()); //don't need to store this
-  double* sendIdsAndCoords = new double[numOwnedVertices*3];
-  MPI_Request* sendReqs = (MPI_Request*) malloc(sizeof(MPI_Request)*numOwnedVertices);
-  int msgCnt = 0;
-  for (int i = 0; i < mesh.nverts(); i++) 
-  {
-    const auto gid = i;
-    destRanks[i] = gid/vertsPerRank;
-    if (gid >= (vertsPerRank*commSize-1)) 
-      destRanks[i] = commSize-1; //last rank gets the remainder
-    if (ownership_vert[i] == rank) 
+    MPI_Request* recvReqs = (MPI_Request*) malloc(sizeof(MPI_Request)*numLocalVerts);
+    double* recvIdsAndCoords = new double[numLocalVerts*3];
+    for (int i = 0; i < numLocalVerts; i++) 
     {
-      sendIdsAndCoords[msgCnt*3] = static_cast<double>(gid);
-      sendIdsAndCoords[msgCnt*3+1] = vertexCoords[i*2];
-      sendIdsAndCoords[msgCnt*3+2] = vertexCoords[i*2+1];
-      int tag = 0;
-      MPI_Isend(&sendIdsAndCoords[msgCnt*3], 3, MPI_DOUBLE, destRanks[i], tag, comm, &sendReqs[msgCnt]);
-      msgCnt++;
+      MPI_Irecv(&recvIdsAndCoords[i*3], 3, MPI_DOUBLE, MPI_ANY_SOURCE, MPI_ANY_TAG, MST_comm, &recvReqs[i]);
     }
-  }
-  assert(msgCnt == numOwnedVertices);
 
-  int mpiErr;
-  mpiErr = MPI_Waitall(numLocalVerts, recvReqs, MPI_STATUSES_IGNORE); assert(mpiErr == MPI_SUCCESS);
-  mpiErr = MPI_Waitall(numOwnedVertices, sendReqs, MPI_STATUSES_IGNORE); assert(mpiErr == MPI_SUCCESS);
-  free(recvReqs);
-  free(sendReqs);
-  delete [] sendIdsAndCoords;
-
-  double *coords = new double[numLocalVerts*2];
-  Omega_h::GO rankStartId = rank*numLocalVerts;
-  if (rank == commSize-1) 
-    rankStartId = rank*(numLocalVerts-remainingVerts);
-  for (int i = 0; i < numLocalVerts; i++) 
-  {
-    const int idx = static_cast<Omega_h::GO>(recvIdsAndCoords[i*3]) - rankStartId;
-    coords[idx*2] = recvIdsAndCoords[i*3+1];
-    coords[idx*2+1] = recvIdsAndCoords[i*3+2];
-  }
-  delete [] recvIdsAndCoords;
-
-  PetscErrorCode ierr;
-  PetscSF sfVert;
-  ierr = DMPlexCreateFromCellListParallelPetsc(comm, dim, numCells, numLocalVerts, numGlobalVerts, 
-        numCorners, PETSC_TRUE, core_cell.data(), dim, coords, &sfVert, dm);CHKERRQ(ierr);
-
-  printf("rank: %d, numCells: %d, numLocalVertices: %d\n", rank, numCells, numLocalVerts);
-
-  // Get the starting and ending index for the topology
-  PetscInt cStart, cEnd, vStart, vEnd, eStart, eEnd;
-  ierr = DMPlexGetHeightStratum(*dm, 0, &cStart, &cEnd); /* cells */ 
-  ierr = DMPlexGetHeightStratum(*dm, 1, &eStart, &eEnd); /* edges */ 
-  ierr = DMPlexGetHeightStratum(*dm, 2, &vStart, &vEnd); /* vertices */
-
-  /* 
-  Iterate through all the edges and then check if each edge is shared by two different cells by 
-  using DMPlexGetSupportSize. It is a boundary edge if the edge exist in only one cell. 
-  */
-  std::vector<int> boundary_edge;
-  for (int i = eStart; i < eEnd; i++)
-  {
-    int support_size;
-    ierr = DMPlexGetSupportSize(*dm, i, &support_size);CHKERRQ(ierr);
-
-    if (support_size == 1)
+    double* sendIdsAndCoords = new double[numOwnedVertices*3];
+    MPI_Request* sendReqs = (MPI_Request*) malloc(sizeof(MPI_Request)*numOwnedVertices);
+    int msgCnt = 0;
+    for (int i = 0; i < global_vertex.size(); i++)
     {
-      boundary_edge.push_back(i);
+      const auto gid = global_vertex[i];
+      int destRank = gid/vertsPerRank;
+
+      if (gid >= (vertsPerRank*MST_commSize-1)) 
+        destRank = MST_commSize-1; //last rank gets the remainder
+      
+      if (ownership_vert[i] >= min_rank && ownership_vert[i] <= max_rank) 
+      {
+        sendIdsAndCoords[msgCnt*3] = static_cast<double>(gid);
+        sendIdsAndCoords[msgCnt*3+1] = vertexCoords[i*2];
+        sendIdsAndCoords[msgCnt*3+2] = vertexCoords[i*2+1];
+        int tag = 0;
+        MPI_Isend(&sendIdsAndCoords[msgCnt*3], 3, MPI_DOUBLE, destRank, tag, MST_comm, &sendReqs[msgCnt]);
+        msgCnt++;
+      }
+    }
+    assert(msgCnt == numOwnedVertices);
+
+    int mpiErr;
+    mpiErr = MPI_Waitall(numLocalVerts, recvReqs, MPI_STATUSES_IGNORE); assert(mpiErr == MPI_SUCCESS);
+    mpiErr = MPI_Waitall(numOwnedVertices, sendReqs, MPI_STATUSES_IGNORE); assert(mpiErr == MPI_SUCCESS);
+    free(recvReqs);
+    free(sendReqs);
+    delete [] sendIdsAndCoords;
+
+    double *coords = new double[numLocalVerts*2];
+    Omega_h::GO rankStartId = MST_rank*numLocalVerts;
+    if (MST_rank == MST_commSize-1) 
+      rankStartId = MST_rank*(numLocalVerts-remainingVerts);
+    for (int i = 0; i < numLocalVerts; i++) 
+    {
+      const int idx = static_cast<Omega_h::GO>(recvIdsAndCoords[i*3]) - rankStartId;
+      coords[idx*2] = recvIdsAndCoords[i*3+1];
+      coords[idx*2+1] = recvIdsAndCoords[i*3+2];
+    }
+    delete [] recvIdsAndCoords;    
+
+    PetscErrorCode ierr;
+    PetscSF sfVert;
+    ierr = DMPlexCreateFromCellListParallelPetsc(MST_comm, dim, numCells, numLocalVerts, numGlobalVerts, 
+          numCorners, PETSC_TRUE, core_cell.data(), dim, coords, &sfVert, dm);CHKERRQ(ierr);
+
+    printf("rank: %d, numCells: %d, numLocalVertices: %d, core_cell: %d\n", MST_rank, numCells, numLocalVerts, core_cell.size());
+
+    // Get the starting and ending index for the topology
+    PetscInt cStart, cEnd, vStart, vEnd, eStart, eEnd;
+    ierr = DMPlexGetHeightStratum(*dm, 0, &cStart, &cEnd); /* cells */ 
+    ierr = DMPlexGetHeightStratum(*dm, 1, &eStart, &eEnd); /* edges */ 
+    ierr = DMPlexGetHeightStratum(*dm, 2, &vStart, &vEnd); /* vertices */
+
+    /* 
+    Iterate through all the edges and then check if each edge is shared by two different cells by 
+    using DMPlexGetSupportSize. It is a boundary edge if the edge exist in only one cell. 
+    */
+    std::vector<int> boundary_edge;
+    for (int i = eStart; i < eEnd; i++)
+    {
+      int support_size;
+      ierr = DMPlexGetSupportSize(*dm, i, &support_size);CHKERRQ(ierr);
+
+      if (support_size == 1)
+      {
+        boundary_edge.push_back(i);
+      }
+      
     }
     
-  }
-  
-  // By using a set, the vertices for all the boundary edges would not repeat
-  // Can be replaced with an unordered_set
-  std::set<int> boundary_vert;
-  for (unsigned int i = 0; i < boundary_edge.size(); i++)
-  {
-    // Get the two vertices for a boundary edge
-    const int *verts;
-    ierr = DMPlexGetCone(*dm, boundary_edge[i], &verts);CHKERRQ(ierr);
-
-    boundary_vert.insert(verts[0]);
-    boundary_vert.insert(verts[1]);
-  }
-
-  // Output an uninterpolated mesh if needed
-  if (options->interpolate == PETSC_FALSE)
-  {
-    DM dm_unint;
-    ierr = DMPlexUninterpolate(*dm, &dm_unint);CHKERRQ(ierr);
-    ierr = DMPlexCopyCoordinates(*dm, dm_unint);CHKERRQ(ierr);
-    ierr = DMDestroy(dm);CHKERRQ(ierr);
-    *dm = dm_unint;
-  }
-
-  // Mark the boundary vertices and edges in DMPlex
-  for (auto i = boundary_vert.begin(); i != boundary_vert.end(); i++)
-  {
-    ierr = DMSetLabelValue(*dm, "marker", *i, 1);CHKERRQ(ierr);
-  }
-  if (options->interpolate == PETSC_TRUE) 
-  {
+    // By using a set, the vertices for all the boundary edges would not repeat
+    // Can be replaced with an unordered_set
+    std::set<int> boundary_vert;
     for (unsigned int i = 0; i < boundary_edge.size(); i++)
     {
-      ierr = DMSetLabelValue(*dm, "marker", boundary_edge[i], 1);CHKERRQ(ierr);
+      // Get the two vertices for a boundary edge
+      const int *verts;
+      ierr = DMPlexGetCone(*dm, boundary_edge[i], &verts);CHKERRQ(ierr);
+
+      boundary_vert.insert(verts[0]);
+      boundary_vert.insert(verts[1]);
+    }
+
+    // Output an uninterpolated mesh if needed
+    if (options->interpolate == PETSC_FALSE)
+    {
+      DM dm_unint;
+      ierr = DMPlexUninterpolate(*dm, &dm_unint);CHKERRQ(ierr);
+      ierr = DMPlexCopyCoordinates(*dm, dm_unint);CHKERRQ(ierr);
+      ierr = DMDestroy(dm);CHKERRQ(ierr);
+      *dm = dm_unint;
+    }
+
+    // Mark the boundary vertices and edges in DMPlex
+    for (auto i = boundary_vert.begin(); i != boundary_vert.end(); i++)
+    {
+      ierr = DMSetLabelValue(*dm, "marker", *i, 1);CHKERRQ(ierr);
+    }
+    if (options->interpolate == PETSC_TRUE) 
+    {
+      for (unsigned int i = 0; i < boundary_edge.size(); i++)
+      {
+        ierr = DMSetLabelValue(*dm, "marker", boundary_edge[i], 1);CHKERRQ(ierr);
+      }
     }
   }
-  
   PetscFunctionReturn(0);
 }
 
@@ -791,6 +828,8 @@ static PetscErrorCode CreateMesh(MPI_Comm comm, AppCtx *user, DM *dm)
 
     if (user->periodicity[0] || user->periodicity[1] || user->periodicity[2]) for (d = 0; d < dim; ++d) user->cells[d] = PetscMax(user->cells[d], 3);
     ierr = CreateQuadMesh(comm, dm, user);CHKERRQ(ierr);
+    MPI_Barrier(comm);
+    exit(0);
     ierr = PetscObjectSetName((PetscObject) *dm, "Mesh");CHKERRQ(ierr);
   } else {
     ierr = DMPlexCreateFromFile(comm, filename, interpolate, dm);CHKERRQ(ierr);
