@@ -611,12 +611,14 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     ownership_elem = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
     ownership_vert = mesh.get_array<Omega_h::LO>(0, "ownership");
 
-    // The erase is backwards to maintain the order of indexing
+    assert(core_cell.size() == 3*class_id_elem.size());
+    // The erase is backwards to ensure the indices before i aren't changed
     for (int i = class_id_elem.size()-1; i >= 0; i--)
     {
       // Erase the overlap between last picpart and the currrent mesh
       if (class_id_elem[i] <= current_max_class_id)
       {
+        // This is inefficient. The memory needs to be moved after each erase
         core_cell.erase(core_cell.begin() + 3*i+2);
         core_cell.erase(core_cell.begin() + 3*i+1);
         core_cell.erase(core_cell.begin() + 3*i);
@@ -633,7 +635,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   MPI_Comm_size(MST_comm, &MST_commSize);
 
   //Temporary to test the solver
-  // comm = MST_comm; 
+  PETSC_COMM_WORLD = MST_comm; 
   // if (MST_comm == MPI_COMM_NULL)
   // {
   //   MPI_Finalize();
@@ -828,8 +830,18 @@ static PetscErrorCode CreateMesh(MPI_Comm comm, AppCtx *user, DM *dm)
 
     if (user->periodicity[0] || user->periodicity[1] || user->periodicity[2]) for (d = 0; d < dim; ++d) user->cells[d] = PetscMax(user->cells[d], 3);
     ierr = CreateQuadMesh(comm, dm, user);CHKERRQ(ierr);
-    MPI_Barrier(comm);
-    exit(0);
+
+    int rank, commSize;
+    MPI_Comm_rank(comm, &rank);
+    MPI_Comm_size(comm, &commSize);
+    fprintf(stderr, "commSize: %d\n", commSize);
+    if (PETSC_COMM_WORLD == MPI_COMM_NULL)
+    {
+      fprintf(stderr, "rank: %d, 1.0\n", rank);
+      return 0;
+    }
+    fprintf(stderr, "rank: %d, abc123\n", rank);
+    
     ierr = PetscObjectSetName((PetscObject) *dm, "Mesh");CHKERRQ(ierr);
   } else {
     ierr = DMPlexCreateFromFile(comm, filename, interpolate, dm);CHKERRQ(ierr);
@@ -1263,12 +1275,24 @@ int main(int argc, char **argv)
   PetscLogStage stagenum0;
   PetscLogStageRegister("Mesh creation", &stagenum0);
   PetscLogStagePush(stagenum0);
-
+  int rank, commSize;
+  MPI_Comm_rank(PETSC_COMM_WORLD, &rank);
+  MPI_Comm_size(PETSC_COMM_WORLD, &commSize);
   ierr = ProcessOptions(PETSC_COMM_WORLD, &user);CHKERRQ(ierr);
-  ierr = SNESCreate(PETSC_COMM_WORLD, &snes);CHKERRQ(ierr);
   ierr = CreateMesh(PETSC_COMM_WORLD, &user, &dm);CHKERRQ(ierr);
+  if (PETSC_COMM_WORLD == MPI_COMM_NULL)
+  {
+    PETSC_COMM_WORLD = MPI_COMM_SELF;
+    fprintf(stderr, "rank: %d, 0.1\n", rank);
+    MPI_Barrier(MPI_COMM_WORLD);
+    ierr = PetscFinalize();
+    fprintf(stderr, "rank: %d, 0.2\n", rank);
+    return ierr;
+  }
+  ierr = SNESCreate(PETSC_COMM_WORLD, &snes);CHKERRQ(ierr);
   ierr = SNESSetDM(snes, dm);CHKERRQ(ierr);
   ierr = DMSetApplicationContext(dm, &user);CHKERRQ(ierr);
+  fprintf(stderr, "rank: %d, 0.00001\n", rank);
 
   ierr = PetscMalloc2(1, &user.exactFuncs, 1, &user.exactFields);CHKERRQ(ierr);
   ierr = SetupDiscretization(dm, &user);CHKERRQ(ierr);
@@ -1277,7 +1301,7 @@ int main(int argc, char **argv)
 
   ierr = DMCreateGlobalVector(dm, &u);CHKERRQ(ierr);
   ierr = PetscObjectSetName((PetscObject) u, "potential");CHKERRQ(ierr);
-
+  fprintf(stderr, "rank: %d, 0.00002\n", rank);
   ierr = DMCreateMatrix(dm, &J);CHKERRQ(ierr);
   if (user.jacobianMF) {
     PetscInt M, m, N, n;
@@ -1303,7 +1327,7 @@ int main(int argc, char **argv)
   } else {
     A = J;
   }
-
+  fprintf(stderr, "rank: %d, 0.00003\n", rank);
   nullSpace = NULL;
   if (user.bcType != DIRICHLET) {
     ierr = MatNullSpaceCreate(PetscObjectComm((PetscObject) dm), PETSC_TRUE, 0, NULL, &nullSpace);CHKERRQ(ierr);
@@ -1382,7 +1406,7 @@ int main(int argc, char **argv)
     ierr = SNESSolve(snes, NULL, u);CHKERRQ(ierr);
     ierr = SNESGetSolution(snes, &u);CHKERRQ(ierr);
     ierr = SNESGetDM(snes, &dm);CHKERRQ(ierr);
-
+    fprintf(stderr, "rank: %d, 0.00004\n", rank);
     if (user.showSolution) {
       ierr = PetscPrintf(PETSC_COMM_WORLD, "Solution\n");CHKERRQ(ierr);
       ierr = VecChop(u, 3.0e-9);CHKERRQ(ierr);
@@ -1464,7 +1488,7 @@ int main(int argc, char **argv)
     ierr = PetscPrintf(PETSC_COMM_WORLD, "Solution boundary integral: %.4g\n", (double) PetscAbsScalar(bdInt));CHKERRQ(ierr);
     if (PetscAbsReal(PetscAbsScalar(bdInt) - exact) > PETSC_SQRT_MACHINE_EPSILON) SETERRQ2(PETSC_COMM_WORLD, PETSC_ERR_PLIB, "Invalid boundary integral %g != %g", (double) PetscAbsScalar(bdInt), (double)exact);
   }
-
+  fprintf(stderr, "rank: %d, 0.00005\n", rank);
   ierr = MatNullSpaceDestroy(&nullSpace);CHKERRQ(ierr);
   if (user.jacobianMF) {ierr = VecDestroy(&userJ.u);CHKERRQ(ierr);}
   if (A != J) {ierr = MatDestroy(&A);CHKERRQ(ierr);}
@@ -1473,6 +1497,9 @@ int main(int argc, char **argv)
   ierr = SNESDestroy(&snes);CHKERRQ(ierr);
   ierr = DMDestroy(&dm);CHKERRQ(ierr);
   ierr = PetscFree2(user.exactFuncs, user.exactFields);CHKERRQ(ierr);
+  fprintf(stderr, "rank: %d, 0.00006\n", rank);
+  MPI_Barrier(MPI_COMM_WORLD);
+  fprintf(stderr, "rank: %d, 0.00007\n", rank);
   ierr = PetscFinalize();
   return ierr;
 }
