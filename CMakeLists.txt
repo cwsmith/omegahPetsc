@@ -33,7 +33,6 @@ target_link_libraries(ex12 Omega_h::omega_h PkgConfig::PETSC)
 target_compile_options(ex12 PRIVATE
   $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
   ${HOST_FLAG_PREFIX} -Wno-unused-parameter>)
-  -Wno-unused-parameter>)
 
 set(petscArgs
   -run_type full
