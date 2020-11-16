@@ -823,9 +823,11 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     mesh.balance();
   }
 
+  PetscErrorCode ierr;
   const int dim = mesh.dim();
   int numVertices; //TODO  'ptscNumVerts'
   int numOwnedVertices; //TODO 'ptscNumOwnedVerts'
+  int numVerticesGhost; //TODO 'ptscNumRmtVerts'
   int numGlobalVerts; //TODO 'ptscNumGlobVerts'
   int numCells; //TODO 'ptscNumCells'
   std::vector<int> global_cell;
@@ -853,27 +855,30 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     //PETSC_NEEDS_4A - 'vtxRemoteIdx'
     Omega_h::HostRead<Omega_h::LO> ghostOwnerRank_rh;
     Omega_h::HostRead<Omega_h::LO> ghostOwnerIdx_rh;
+    const int numCoreRmtVtx = numCoreVerts - numOwnedCoreVerts;
+    numVerticesGhost = numCoreRmtVtx;
     PetscSFNode *remoteVertex;
-    int ierr = PetscMalloc2(numVerticesGhost, &localVertex,
-                        numVerticesGhost, &remoteVertex);CHKERRQ(ierr);
+    PetscInt *localVertex;
+    ierr = PetscMalloc2(numCoreVerts, &localVertex,
+                        numCoreRmtVtx, &remoteVertex);CHKERRQ(ierr);
     getPicPartCoreVtxOwnerIdx(mesh, numCoreVerts, numOwnedCoreVerts, numCoreElms,
         partvtx2corevtx, ghostOwnerRank_rh, ghostOwnerIdx_rh);
-    const int numCoreRmtVtx = numCoreVerts - numOwnedCoreVerts;
     //PETSC_NEEDS_4B - 'vtxRemoteRank'
     //create a plex object on each process from local info
     ierr = DMPlexCreateFromCellListPetsc(comm, dim, numCoreElms, 
-        numCoreVertices, numVertsPerTri, PETSC_FALSE, global_cell.data(),
+        numCoreVerts, numVertsPerTri, PETSC_FALSE, global_cell.data(),
         dim, vertexCoords.data(), dm); CHKERRQ(ierr);
 
 
     PetscSF pointSF;
     ierr = DMGetPointSF(*dm, &pointSF);CHKERRQ(ierr);
-    ierr = PetscSFSetGraph(pointSF, numCoreElms+numCoreVertices, numVerticesGhost,
+    ierr = PetscSFSetGraph(pointSF, numCoreElms+numCoreVerts, numCoreRmtVtx,
         localVertex, PETSC_OWN_POINTER, remoteVertex, PETSC_OWN_POINTER);CHKERRQ(ierr);
-
+    if(false) {
+      PetscSFView(pointSF, PETSC_VIEWER_STDOUT_WORLD);
+    }
   }
-  else //partitioned omegah mesh
-  {
+  else { //partitioned omegah mesh
     getPtnMeshElmToVtxArray(mesh, global_cell);
     Omega_h::HostRead<Omega_h::LO> ownership_vert = mesh.ask_owners(0).ranks;
     numOwnedVertices = std::count(ownership_vert.data(), ownership_vert.data()+ownership_vert.size(), rank);
@@ -881,7 +886,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     numVertices = mesh.nverts();
     numCells = mesh.nelems();
     vertexCoords = mesh.coords();
-    getNeighborElmCounts(mesh, nborRanks, nborElmCnts, debug);
+    getNeighborElmCounts(mesh, nborRanks, nborElmCnts, false);
     assert( nborRanks.size() > 0 &&
         (nborRanks.size() == nborElmCnts.size()) );
     vtxRemoteRank = mesh.ask_owners(0).ranks;
@@ -917,7 +922,6 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
       }
     }
 
-    PetscErrorCode ierr;
     //create a plex object on each process from local info
     ierr = DMPlexCreateFromCellListPetsc(comm, dim, numCells, 
         numVertices, numVertsPerTri, PETSC_FALSE, global_cell.data(),
@@ -926,7 +930,10 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     PetscSF pointSF;
     ierr = DMGetPointSF(*dm, &pointSF);CHKERRQ(ierr);
     ierr = PetscSFSetGraph(pointSF, numCells+numVertices, numVerticesGhost, localVertex, PETSC_OWN_POINTER, remoteVertex, PETSC_OWN_POINTER);CHKERRQ(ierr);
-  }
+    if(false) {
+      PetscSFView(pointSF, PETSC_VIEWER_STDOUT_WORLD);
+    }
+  } //end partitioned omegah mesh
   assert(vertexCoords.size() == dim*numVertices);
 
   const auto debug = options->debug;
@@ -940,9 +947,6 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     }
   }
 
-  if(debug) {
-    PetscSFView(pointSF, PETSC_VIEWER_STDOUT_WORLD);
-  }
 
   DM dm_int;
   ierr = DMPlexInterpolate(*dm, &dm_int);
