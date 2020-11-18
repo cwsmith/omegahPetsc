@@ -593,39 +593,12 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     }
     MPI_Bcast(&current_max_class_id, 1, MPI_INT, i, comm);
   }
-
-  // Get the vertices to cell adjacency
-  Omega_h::Read<Omega_h::LO> cell = mesh.ask_elem_verts();
-
-  // Change the local to global vertex id for adjacency
-  std::vector<int> core_cell(cell.size());
-  Omega_h::Read<long> global_vertex = mesh.get_array<long>(0, "gids");
-  for (int i = 0; i < cell.size(); i++)
-  {
-    core_cell[i] = global_vertex[cell[i]];
-  }
-
   // Use the last picpart to add the remaining part of the mesh if needed
-  if (rank == commSize - 1 && current_max_class_id != max_class_id)
+  if (rank == commSize - 1 && current_max_class_id != max_class_id) 
   {
     ownership_elem = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
     ownership_vert = mesh.get_array<Omega_h::LO>(0, "ownership");
 
-    assert(core_cell.size() == 3*class_id_elem.size());
-    // The erase is backwards to ensure the indices before i aren't changed
-    // The indices after i are changed, but they are not used again
-    for (int i = class_id_elem.size()-1; i >= 0; i--)
-    {
-      // Erase the overlap between last picpart and the currrent mesh
-      if (class_id_elem[i] <= current_max_class_id)
-      {
-        // This is inefficient. The memory needs to be moved after each erase
-        core_cell.erase(core_cell.begin() + 3*i+2);
-        core_cell.erase(core_cell.begin() + 3*i+1);
-        core_cell.erase(core_cell.begin() + 3*i);
-      }
-      
-    }
     // No longer disabling the last process
     exclude_proc = -1;
   }
@@ -635,9 +608,38 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   MPI_Comm_rank(MST_comm, &MST_rank);
   MPI_Comm_size(MST_comm, &MST_commSize);
   PETSC_COMM_WORLD = MST_comm; 
-  
+
   if (MST_comm != MPI_COMM_NULL)
   {
+    // Get the vertices to cell adjacency
+    Omega_h::Read<Omega_h::LO> cell = mesh.ask_elem_verts();
+
+    std::vector<int> core_cell(cell.size());
+    Omega_h::Read<long> global_vertex = mesh.get_array<long>(0, "gids");
+    if (rank == commSize - 1 && current_max_class_id != max_class_id)
+    {
+      core_cell.clear();
+      for (int i = 0; i < class_id_elem.size(); i++)
+      {
+        // Use the non-overlapping part between last picpart and the currrent mesh
+        if (class_id_elem[i] > current_max_class_id)
+        {
+          core_cell.push_back(global_vertex[cell[3*i]]);
+          core_cell.push_back(global_vertex[cell[3*i+1]]);
+          core_cell.push_back(global_vertex[cell[3*i+2]]);
+        }
+        
+      }
+    }
+    else
+    {
+      // Change the local to global vertex id for adjacency
+      for (int i = 0; i < cell.size(); i++)
+      {
+        core_cell[i] = global_vertex[cell[i]];
+      }
+    }
+  
     Omega_h::Read<Omega_h::Real> vertexCoords = mesh.coords();
    
     int numOwnedVertices = 0;
