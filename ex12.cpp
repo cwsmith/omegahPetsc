@@ -564,13 +564,13 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   const int dim = mesh.dim();
   const int numCorners = 3;
 
-  Omega_h::Read<Omega_h::LO> class_id_elem = mesh.get_array<Omega_h::LO>(mesh.dim(), "class_id");
+  Omega_h::HostRead<Omega_h::LO> class_id_elem = mesh.get_array<Omega_h::LO>(mesh.dim(), "class_id");
   int max_class_id = *std::max_element(class_id_elem.data(), class_id_elem.data()+class_id_elem.size());
   int min_class_id = *std::min_element(class_id_elem.data(), class_id_elem.data()+class_id_elem.size());
   printf("rank: %d, min_class: %d, max_class: %d\n", rank, min_class_id, max_class_id);
  
-  Omega_h::Read<Omega_h::LO> ownership_elem;
-  Omega_h::Read<Omega_h::LO> ownership_vert;
+  Omega_h::HostRead<Omega_h::LO> ownership_elem;
+  Omega_h::HostRead<Omega_h::LO> ownership_vert;
   int current_max_class_id; // Keep track of the current highest class id of the selected picparts
   int exclude_proc = -1; // Not disabled processes have -1
 
@@ -615,7 +615,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     Omega_h::Read<Omega_h::LO> cell = mesh.ask_elem_verts();
 
     std::vector<int> core_cell(cell.size());
-    Omega_h::Read<long> global_vertex = mesh.get_array<long>(0, "gids");
+    Omega_h::HostRead<long> global_vertex = mesh.get_array<long>(0, "gids");
     if (rank == commSize - 1 && current_max_class_id != max_class_id)
     {
       core_cell.clear();
@@ -624,9 +624,9 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
         // Use the non-overlapping part between last picpart and the currrent mesh
         if (class_id_elem[i] > current_max_class_id)
         {
-          core_cell.push_back(global_vertex[cell[3*i]]);
-          core_cell.push_back(global_vertex[cell[3*i+1]]);
-          core_cell.push_back(global_vertex[cell[3*i+2]]);
+          core_cell.push_back(global_vertex[cell.get(3*i)]);
+          core_cell.push_back(global_vertex[cell.get(3*i+1)]);
+          core_cell.push_back(global_vertex[cell.get(3*i+2)]);
         }
         
       }
@@ -636,7 +636,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
       // Change the local to global vertex id for adjacency
       for (int i = 0; i < cell.size(); i++)
       {
-        core_cell[i] = global_vertex[cell[i]];
+        core_cell[i] = global_vertex[cell.get(i)];
       }
     }
   
@@ -660,8 +660,8 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
       // Check if a class id is skipped
       for (int i = current_max_class_id+1; i <= max_class_id; i++)
       {
-        int min_rank_elem_index = std::distance(class_id_elem.begin(), 
-                      std::find(class_id_elem.begin(), class_id_elem.end(), i));
+        int min_rank_elem_index = std::distance(class_id_elem.data(), 
+                  std::find(class_id_elem.data(), class_id_elem.data()+class_id_elem.size(), i));
         if (min_rank_elem_index != class_id_elem.size())
         {
           // Determine min rank from the element with the smallest class id on the last MST rank
@@ -716,8 +716,8 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
       if (ownership_vert[i] >= min_rank && ownership_vert[i] <= max_rank) 
       {
         sendIdsAndCoords[msgCnt*3] = static_cast<double>(gid);
-        sendIdsAndCoords[msgCnt*3+1] = vertexCoords[i*2];
-        sendIdsAndCoords[msgCnt*3+2] = vertexCoords[i*2+1];
+        sendIdsAndCoords[msgCnt*3+1] = vertexCoords.get(i*2);
+        sendIdsAndCoords[msgCnt*3+2] = vertexCoords.get(i*2+1);
         int tag = 0;
         MPI_Isend(&sendIdsAndCoords[msgCnt*3], 3, MPI_DOUBLE, destRank, tag, MST_comm, &sendReqs[msgCnt]);
         msgCnt++;
