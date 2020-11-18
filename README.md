@@ -219,7 +219,7 @@ export PKG_CONFIG_PATH=$PKG_CONFIG_PATH:~/barn/petsc/arch-aimos/lib/pkgconfig
 source ~/barn/omegahPetsc/envOmegahPetscGccSpectrum.sh
 mkdir build-omegahPetsc
 cd !$
-cmake ../omegahPetsc/ -DCMAKE_CUDA_HOST_COMPILER=mpicxx -DCMAKE_CUDA_FLAGS="-arch=sm_70"
+cmake ../omegahPetsc/ -DOMEGAH_PETSC_USE_CUDA=ON -DCMAKE_CUDA_HOST_COMPILER=mpicxx -DCMAKE_CUDA_FLAGS="-arch=sm_70"
 make
 ```
 
