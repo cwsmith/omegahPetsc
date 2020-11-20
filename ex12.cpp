@@ -605,14 +605,15 @@ void getPicPartCoreElmToVtxArray(Omega_h::Mesh &mesh, int& numCells, std::vector
 
 //petsc needs an array of vertex coordinates for all vertices in the core on
 //this process
-void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh,
+void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh, const int rank,
     int& numCoreVertices, int& numOwnedVertices,
     Omega_h::HostRead<Omega_h::Real>& coreVertexCoords,
     Omega_h::Read<Omega_h::LO>& partvtx2corevtx_d) {
-  const int rank = mesh.comm()->rank();
   //read tag placed by pumipic that defines which process owns each vertex
   const auto vtxOwnership_d = mesh.get_array<Omega_h::LO>(0, "ownership");
-  //TODO replace with reduce {
+  fprintf(stderr, "%d 1.00\n", rank);
+  MPI_Barrier(MPI_COMM_WORLD);
+  //TODO replace with reduce
   {
     Omega_h::Write<Omega_h::LO> numOwnedVertices_d(1,0);
     const auto countVerts = OMEGA_H_LAMBDA(const int i) {
@@ -622,6 +623,8 @@ void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh,
     Omega_h::HostRead<Omega_h::LO> numOwnedVertices_hr(numOwnedVertices_d);
     numOwnedVertices = numOwnedVertices_hr[0];
   }
+  fprintf(stderr, "%d 1.01\n", rank);
+  MPI_Barrier(MPI_COMM_WORLD);
   assert(numOwnedVertices < mesh.nverts());
   //for each element owned by this rank mark the vertices bound by it as owned
   const Omega_h::Write<Omega_h::LO> isCoreVtx(mesh.nverts(),0);
@@ -636,6 +639,8 @@ void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh,
     }
   };
   Omega_h::parallel_for(mesh.nelems(), markCoreVerts);
+  fprintf(stderr, "%d 1.02\n", rank);
+  MPI_Barrier(MPI_COMM_WORLD);
   //compute numVerties with a parallel reduce over isCoreVtx to 
   // get the total number of vertices bound by core elements
   { //TODO replace with reduce
@@ -648,20 +653,27 @@ void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh,
     numCoreVertices = numCoreVertices_hr[0];
   }
 
+  fprintf(stderr, "%d 1.03\n", rank);
+  MPI_Barrier(MPI_COMM_WORLD);
   //create an array for the coordinates of vertices on this rank
+  const auto numPartVerts = mesh.nverts();
   auto coords = mesh.coords();
   Omega_h::Write<Omega_h::Real> coreVtxCoords_d(numCoreVertices*2);
-  Omega_h::Write<Omega_h::LO> vtxMap_wd(numCoreVertices,-1);
+  Omega_h::Write<Omega_h::LO> vtxMap_wd(numPartVerts,-1);
   Omega_h::Write<Omega_h::LO> vtxIdx(1,0);
   const auto getCoordinatesAndMap = OMEGA_H_LAMBDA(Omega_h::LO vtx) {
     if ( isCoreVtx[vtx] ) {
       const auto idx = Omega_h::atomic_fetch_add(&(vtxIdx[0]), 1); 
+      if(vtx>=numPartVerts) printf("vtx %d numCoreVertices %d\n", vtx, numPartVerts);
+      assert(vtx<numPartVerts);
       vtxMap_wd[vtx] = idx;
       coreVtxCoords_d[idx*2] = coords[vtx*2];
       coreVtxCoords_d[idx*2+1] = coords[vtx*2+1];
     }
   };
   Omega_h::parallel_for(mesh.nverts(), getCoordinatesAndMap);
+  fprintf(stderr, "%d 1.04\n", rank);
+  MPI_Barrier(MPI_COMM_WORLD);
   { //copy to host, set input arg references
     Omega_h::HostRead<Omega_h::Real> hr(coreVtxCoords_d);
     coreVertexCoords = hr;
@@ -670,6 +682,8 @@ void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh,
     Omega_h::Read<Omega_h::LO> dr(vtxMap_wd);
     partvtx2corevtx_d = dr;
   }
+  fprintf(stderr, "%d 1.05\n", rank);
+  MPI_Barrier(MPI_COMM_WORLD);
 }
 
 // mesh (in) the picpart mesh
@@ -678,11 +692,10 @@ void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh,
 //                        within the core,
 //                        vtxMap[i] >= 0 if vtx i is in the core, = -1 otherwise
 // coreVtxOwnerRank_rd (inOut) process id that owns each vertex within the core
-void getPicPartCoreVtxOwnerRanks(Omega_h::Mesh mesh, 
+void getPicPartCoreVtxOwnerRanks(Omega_h::Mesh mesh, const int rank,
     const int numCoreVertices,
     Omega_h::Read<Omega_h::LO>& partvtx2corevtx_rd,
     Omega_h::Read<Omega_h::I32>& coreVtxOwnerRank_rd) {
-  const int rank = mesh.comm()->rank();
   const auto vtxOwner_d = mesh.get_array<Omega_h::LO>(0, "ownership");
   //create the array of owner ranks for the vertices in the core
   Omega_h::Write<Omega_h::LO> coreVtxRanks_d(numCoreVertices,rank);
@@ -710,12 +723,11 @@ void getPicPartCoreVtxOwnerRanks(Omega_h::Mesh mesh,
 // coreVtxOwnIdx_rd (inOut) index on the local or remote process for each vertex 
 //                      within the core
 //
-void getPicPartCoreVtxOwnerIdx(Omega_h::Mesh &mesh,
+void getPicPartCoreVtxOwnerIdx(Omega_h::Mesh &mesh, const int rank,
     const int numCoreVerts, const int numCoreOwnedVerts, const int numCoreElms,
     Omega_h::Read<Omega_h::LO>& partvtx2corevtx_rd,
     Omega_h::HostRead<Omega_h::LO>& ghostOwnerRank_rh,
     Omega_h::HostRead<Omega_h::LO>& ghostOwnerIdx_rh) {
-  const int self = mesh.comm()->rank();
   const int numCoreGhostVerts = numCoreVerts - numCoreOwnedVerts;
   assert(numCoreGhostVerts >=0);
   const auto vtxOwner_d = mesh.get_array<Omega_h::LO>(0, "ownership");
@@ -727,7 +739,7 @@ void getPicPartCoreVtxOwnerIdx(Omega_h::Mesh &mesh,
   Omega_h::Write<Omega_h::LO> ghostIdx(1,0);
   const auto getGhostVtxInfo = OMEGA_H_LAMBDA(Omega_h::LO i) {
     const auto coreIdx = partvtx2corevtx_rd[i];
-    if ( coreIdx >= 0 && vtxOwner_d[i] != self ) { // in the core and not owned
+    if ( coreIdx >= 0 && vtxOwner_d[i] != rank ) { // in the core and not owned
       const auto idx = Omega_h::atomic_fetch_add(&(ghostIdx[0]), 1); 
       coreVtx2ghostVtx_d[coreIdx] = idx;
       ghostVtx2coreVtx_d[idx] = coreIdx;
@@ -812,10 +824,13 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   }
   else if (strcmp(options->mesh_type, "picpart") == 0)
   {
+    fprintf(stderr, "%d 0.001\n", rank);
     Omega_h::filesystem::path file_path = options->picpart_path;
     file_path += std::to_string(rank);
     file_path += ".osh";
     Omega_h::binary::read(file_path, lib.self(), &mesh);
+    fprintf(stderr, "%d 0.002\n", rank);
+    MPI_Barrier(MPI_COMM_WORLD);
   }
   else
   {
@@ -840,28 +855,34 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   Omega_h::Read<int> nborElmCnts;
   if (strcmp(options->mesh_type, "picpart") == 0)
   {
+    fprintf(stderr, "%d 0.0\n", rank);
     int numCoreElms;
     getPicPartCoreElmToVtxArray(mesh, numCoreElms, global_cell);
+    fprintf(stderr, "%d 0.01\n", rank);
+    MPI_Barrier(MPI_COMM_WORLD);
     //PETSC_NEEDS_1 - 'vertexCoords'
     int numCoreVerts;
     int numOwnedCoreVerts;
-    getPicPartCoreVtxCoords(mesh, numCoreVerts, numOwnedCoreVerts, vertexCoords, partvtx2corevtx);
+    getPicPartCoreVtxCoords(mesh, rank, numCoreVerts, numOwnedCoreVerts, vertexCoords, partvtx2corevtx);
+    fprintf(stderr, "%d 0.02\n", rank);
+    MPI_Barrier(MPI_COMM_WORLD);
     numVertices = numCoreVerts;
     numOwnedVertices = numOwnedCoreVerts;
     MPI_Allreduce(&numOwnedVertices, &numGlobalVerts, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
-    Omega_h::Read<Omega_h::I32> coreVtxOwnRank;
-    getPicPartCoreVtxOwnerRanks(mesh, numCoreVerts, partvtx2corevtx, coreVtxOwnRank);
+    //Omega_h::Read<Omega_h::I32> coreVtxOwnRank;
+    //getPicPartCoreVtxOwnerRanks(mesh, rank, numCoreVerts, partvtx2corevtx, coreVtxOwnRank);
     Omega_h::Read<Omega_h::LO> coreVtxOwnIdx;
     //PETSC_NEEDS_4A - 'vtxRemoteIdx'
     Omega_h::HostRead<Omega_h::LO> ghostOwnerRank_rh;
     Omega_h::HostRead<Omega_h::LO> ghostOwnerIdx_rh;
+    fprintf(stderr, "%d 0.1\n", rank);
     const int numCoreRmtVtx = numCoreVerts - numOwnedCoreVerts;
     numVerticesGhost = numCoreRmtVtx;
     PetscSFNode *remoteVertex;
     PetscInt *localVertex;
     ierr = PetscMalloc2(numCoreVerts, &localVertex,
                         numCoreRmtVtx, &remoteVertex);CHKERRQ(ierr);
-    getPicPartCoreVtxOwnerIdx(mesh, numCoreVerts, numOwnedCoreVerts, numCoreElms,
+    getPicPartCoreVtxOwnerIdx(mesh, rank, numCoreVerts, numOwnedCoreVerts, numCoreElms,
         partvtx2corevtx, ghostOwnerRank_rh, ghostOwnerIdx_rh);
     //PETSC_NEEDS_4B - 'vtxRemoteRank'
     //create a plex object on each process from local info
@@ -871,9 +892,15 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
 
 
     PetscSF pointSF;
+    fprintf(stderr, "%d 0.2\n", rank);
+    MPI_Barrier(MPI_COMM_WORLD);
     ierr = DMGetPointSF(*dm, &pointSF);CHKERRQ(ierr);
+    fprintf(stderr, "%d 0.3\n", rank);
+    MPI_Barrier(MPI_COMM_WORLD);
     ierr = PetscSFSetGraph(pointSF, numCoreElms+numCoreVerts, numCoreRmtVtx,
         localVertex, PETSC_OWN_POINTER, remoteVertex, PETSC_OWN_POINTER);CHKERRQ(ierr);
+    fprintf(stderr, "%d 0.4\n", rank);
+    MPI_Barrier(MPI_COMM_WORLD);
     if(false) {
       PetscSFView(pointSF, PETSC_VIEWER_STDOUT_WORLD);
     }
@@ -947,6 +974,8 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     }
   }
 
+  fprintf(stderr, "%d 0.5\n", rank);
+  MPI_Barrier(MPI_COMM_WORLD);
 
   DM dm_int;
   ierr = DMPlexInterpolate(*dm, &dm_int);
