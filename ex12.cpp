@@ -646,22 +646,14 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     int numCells = mesh.nelems();
     int max_rank = *std::max_element(ownership_elem.data(), ownership_elem.data()+ownership_elem.size());
     int min_rank = *std::min_element(ownership_elem.data(), ownership_elem.data()+ownership_elem.size());
-    if (rank != commSize-1)
-    {
-      // Sum the number of vertices for each world rank on this picpart
-      // The vertices would not overlap between each MST rank
-      for (int i = min_rank; i <= max_rank; i++)
-      {
-        numOwnedVertices += std::count(ownership_vert.data(), ownership_vert.data()+ownership_vert.size(), i);
-      }
-    }
-    else
+    if (rank == commSize - 1 && current_max_class_id != max_class_id)
     {
       // Check if a class id is skipped
       for (int i = current_max_class_id+1; i <= max_class_id; i++)
       {
         int min_rank_elem_index = std::distance(class_id_elem.data(), 
                   std::find(class_id_elem.data(), class_id_elem.data()+class_id_elem.size(), i));
+
         if (min_rank_elem_index != class_id_elem.size())
         {
           // Determine min rank from the element with the smallest class id on the last MST rank
@@ -678,6 +670,15 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
       }
     
       numCells = core_cell.size()/3;
+    }
+    else
+    {
+      // Sum the number of vertices for each world rank on this picpart
+      // The vertices would not overlap between each MST rank
+      for (int i = min_rank; i <= max_rank; i++)
+      {
+        numOwnedVertices += std::count(ownership_vert.data(), ownership_vert.data()+ownership_vert.size(), i);
+      }
     }
 
     fprintf(stderr, "rank: %d, numCells: %d, numVertices: %d\n", rank, numCells, numOwnedVertices);
@@ -742,7 +743,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
       coords[idx*2] = recvIdsAndCoords[i*3+1];
       coords[idx*2+1] = recvIdsAndCoords[i*3+2];
     }
-    delete [] recvIdsAndCoords;    
+    delete [] recvIdsAndCoords;
 
     PetscErrorCode ierr;
     PetscSF sfVert;
