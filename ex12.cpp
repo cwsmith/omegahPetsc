@@ -614,8 +614,17 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     // Get the vertices to cell adjacency
     Omega_h::Read<Omega_h::LO> cell = mesh.ask_elem_verts();
 
+    // Change the local to global vertex id for adjacency
     std::vector<int> core_cell(cell.size());
     Omega_h::HostRead<long> global_vertex = mesh.get_array<long>(0, "gids");
+
+    Omega_h::Read<Omega_h::Real> vertexCoords = mesh.coords();
+
+    int numOwnedVertices = 0;
+    int numCells = mesh.nelems();
+    int max_rank = *std::max_element(ownership_elem.data(), ownership_elem.data()+ownership_elem.size());
+    int min_rank = *std::min_element(ownership_elem.data(), ownership_elem.data()+ownership_elem.size());
+
     if (rank == commSize - 1 && current_max_class_id != max_class_id)
     {
       core_cell.clear();
@@ -628,26 +637,8 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
           core_cell.push_back(global_vertex[cell.get(3*i+1)]);
           core_cell.push_back(global_vertex[cell.get(3*i+2)]);
         }
-        
       }
-    }
-    else
-    {
-      // Change the local to global vertex id for adjacency
-      for (int i = 0; i < cell.size(); i++)
-      {
-        core_cell[i] = global_vertex[cell.get(i)];
-      }
-    }
-  
-    Omega_h::Read<Omega_h::Real> vertexCoords = mesh.coords();
-   
-    int numOwnedVertices = 0;
-    int numCells = mesh.nelems();
-    int max_rank = *std::max_element(ownership_elem.data(), ownership_elem.data()+ownership_elem.size());
-    int min_rank = *std::min_element(ownership_elem.data(), ownership_elem.data()+ownership_elem.size());
-    if (rank == commSize - 1 && current_max_class_id != max_class_id)
-    {
+
       // Check if a class id is skipped
       for (int i = current_max_class_id+1; i <= max_class_id; i++)
       {
@@ -666,13 +657,17 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
           }
           break;
         }
-        
       }
     
       numCells = core_cell.size()/3;
     }
     else
     {
+      for (int i = 0; i < cell.size(); i++)
+      {
+        core_cell[i] = global_vertex[cell.get(i)];
+      }
+
       // Sum the number of vertices for each world rank on this picpart
       // The vertices would not overlap between each MST rank
       for (int i = min_rank; i <= max_rank; i++)
