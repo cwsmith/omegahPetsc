@@ -753,6 +753,19 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     ierr = DMPlexGetHeightStratum(*dm, 1, &eStart, &eEnd); /* edges */ 
     ierr = DMPlexGetHeightStratum(*dm, 2, &vStart, &vEnd); /* vertices */
 
+    int dm_total_cell = 0;
+    int oh_total_cell = 0;
+    int dm_cell = cEnd-cStart;
+    MPI_Allreduce(&dm_cell, &dm_total_cell, 1, MPI_INT, MPI_SUM, MST_comm);
+    MPI_Allreduce(&numCells, &oh_total_cell, 1, MPI_INT, MPI_SUM, MST_comm);
+    fprintf(stderr, "dm_rank: %d, dm_cell: %d\n", MST_rank, dm_cell);
+    if (MST_rank == 0)
+    {
+      fprintf(stderr, "dm_total_cell: %d, oh_total_cell: %d\n", dm_total_cell, oh_total_cell);
+    }
+    assert(dm_total_cell == oh_total_cell);
+    
+
     /* 
     Iterate through all the edges and then check if each edge is shared by two different cells by 
     using DMPlexGetSupportSize. It is a boundary edge if the edge exist in only one cell. 
