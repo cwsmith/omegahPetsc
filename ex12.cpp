@@ -771,16 +771,18 @@ void getPicPartCoreVtxOwnerIdx(Omega_h::Mesh &mesh, const int rank,
   const auto findIdxOfGid = OMEGA_H_LAMBDA(Omega_h::LO i) {
     const auto coreIdx = partvtx2corevtx_rd[i];
     const auto vtxGid = vtxGids_d[i];
+    assert(vtxGid>=0 && vtxGid<nverts);
     //look for ghosts with matching Gids, there is no race condition
     //since each vtx can appear exactly once in the local picpart mesh
-    for(int j=0; j<=numGhostsReceived; j++) {
+    for(int j=0; j<numGhostsReceived; j++) {
       //TODO move conditional outside the loop to minimize divergence
       if ( vtxGid == inGid[j] ) {
+        assert(coreIdx>=0);
         ownerIdx_d[j] = numCoreElms + coreIdx; //PETSC_NEEDS_4A
       }
     }
   };
-  Omega_h::parallel_for(mesh.nverts(), getGhostVtxInfo);
+  Omega_h::parallel_for(mesh.nverts(), findIdxOfGid);
 
   Omega_h::LOs ownerIdx_rd(ownerIdx_d);
   const auto ghostOwnerIdx_rd = distInv.exch(ownerIdx_rd,1);
