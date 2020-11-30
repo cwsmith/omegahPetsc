@@ -22,6 +22,8 @@ if(OMEGAH_PETSC_USE_CUDA AND NOT Omega_h_USE_CUDA)
                       "Omega_h with CUDA disabled 'Omega_h_USE_CUDA=${Omega_h_USE_CUDA}'")
 endif()
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 add_executable(ex12 ex12.cpp)
 if(OMEGAH_PETSC_USE_CUDA)
   enable_language(CUDA)
