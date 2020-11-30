@@ -611,8 +611,6 @@ void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh, const int rank,
     Omega_h::Read<Omega_h::LO>& partvtx2corevtx_d) {
   //read tag placed by pumipic that defines which process owns each vertex
   const auto vtxOwnership_d = mesh.get_array<Omega_h::LO>(0, "ownership");
-  fprintf(stderr, "%d 1.00\n", rank);
-  MPI_Barrier(MPI_COMM_WORLD);
   //TODO replace with reduce
   {
     Omega_h::Write<Omega_h::LO> numOwnedVertices_d(1,0);
@@ -623,8 +621,6 @@ void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh, const int rank,
     Omega_h::HostRead<Omega_h::LO> numOwnedVertices_hr(numOwnedVertices_d);
     numOwnedCoreVerts = numOwnedVertices_hr[0];
   }
-  fprintf(stderr, "%d 1.01\n", rank);
-  MPI_Barrier(MPI_COMM_WORLD);
   assert(numOwnedCoreVerts < mesh.nverts());
   //for each element owned by this rank mark the vertices bound by it as owned
   const Omega_h::Write<Omega_h::LO> isCoreVtx(mesh.nverts(),0);
@@ -639,8 +635,6 @@ void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh, const int rank,
     }
   };
   Omega_h::parallel_for(mesh.nelems(), markCoreVerts);
-  fprintf(stderr, "%d 1.02\n", rank);
-  MPI_Barrier(MPI_COMM_WORLD);
   //compute numVerties with a parallel reduce over isCoreVtx to 
   // get the total number of vertices bound by core elements
   { //TODO replace with reduce
@@ -653,8 +647,6 @@ void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh, const int rank,
     numCoreVerts = numCoreVertices_hr[0];
   }
 
-  fprintf(stderr, "%d 1.03\n", rank);
-  MPI_Barrier(MPI_COMM_WORLD);
   //create an array for the coordinates of vertices on this rank
   const auto numPartVerts = mesh.nverts();
   auto coords = mesh.coords();
@@ -672,8 +664,6 @@ void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh, const int rank,
     }
   };
   Omega_h::parallel_for(mesh.nverts(), getCoordinatesAndMap);
-  fprintf(stderr, "%d 1.04\n", rank);
-  MPI_Barrier(MPI_COMM_WORLD);
   { //copy to host, set input arg references
     Omega_h::HostRead<Omega_h::Real> hr(coreVtxCoords_d);
     coreVertexCoords = hr;
@@ -682,8 +672,6 @@ void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh, const int rank,
     Omega_h::Read<Omega_h::LO> dr(vtxMap_wd);
     partvtx2corevtx_d = dr;
   }
-  fprintf(stderr, "%d 1.05\n", rank);
-  MPI_Barrier(MPI_COMM_WORLD);
 }
 
 // mesh (in) the picpart mesh
@@ -826,12 +814,10 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   }
   else if (strcmp(options->mesh_type, "picpart") == 0)
   {
-    fprintf(stderr, "%d 0.001\n", rank);
     Omega_h::filesystem::path file_path = options->picpart_path;
     file_path += std::to_string(rank);
     file_path += ".osh";
     Omega_h::binary::read(file_path, lib.self(), &mesh);
-    fprintf(stderr, "%d 0.002\n", rank);
     MPI_Barrier(MPI_COMM_WORLD);
   }
   else
@@ -857,17 +843,12 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   Omega_h::Read<int> nborElmCnts;
   if (strcmp(options->mesh_type, "picpart") == 0)
   {
-    fprintf(stderr, "%d 0.0\n", rank);
     int numCoreElms;
     getPicPartCoreElmToVtxArray(mesh, numCoreElms, global_cell);
-    fprintf(stderr, "%d 0.01\n", rank);
-    MPI_Barrier(MPI_COMM_WORLD);
     //PETSC_NEEDS_1 - 'vertexCoords'
     int numCoreVerts;
     int numOwnedCoreVerts;
     getPicPartCoreVtxCoords(mesh, rank, numCoreVerts, numOwnedCoreVerts, vertexCoords, partvtx2corevtx);
-    fprintf(stderr, "%d 0.02\n", rank);
-    MPI_Barrier(MPI_COMM_WORLD);
     numVertices = numCoreVerts;
     numOwnedVertices = numOwnedCoreVerts;
     MPI_Allreduce(&numOwnedVertices, &numGlobalVerts, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
@@ -877,7 +858,6 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     //PETSC_NEEDS_4A - 'vtxRemoteIdx'
     Omega_h::HostRead<Omega_h::LO> ghostOwnerRank_rh;
     Omega_h::HostRead<Omega_h::LO> ghostOwnerIdx_rh;
-    fprintf(stderr, "%d 0.1\n", rank);
     const int numCoreRmtVtx = numCoreVerts - numOwnedCoreVerts;
     numVerticesGhost = numCoreRmtVtx;
     getPicPartCoreVtxOwnerIdx(mesh, rank, numCoreVerts, numOwnedCoreVerts, numCoreElms,
@@ -886,7 +866,6 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
       assert(ghostOwnerRank_rh.size());
       assert(ghostOwnerIdx_rh.size());
     }
-    MPI_Barrier(MPI_COMM_WORLD);
     //PETSC_NEEDS_4B - 'vtxRemoteRank'
     //create a plex object on each process from local info
     ierr = DMPlexCreateFromCellListPetsc(comm, dim, numCoreElms, 
@@ -904,15 +883,9 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     }
 
     PetscSF pointSF;
-    fprintf(stderr, "%d 0.2\n", rank);
-    MPI_Barrier(MPI_COMM_WORLD);
     ierr = DMGetPointSF(*dm, &pointSF);CHKERRQ(ierr);
-    fprintf(stderr, "%d 0.3\n", rank);
-    MPI_Barrier(MPI_COMM_WORLD);
     ierr = PetscSFSetGraph(pointSF, numCoreElms+numCoreVerts, numCoreRmtVtx,
         localVertex, PETSC_OWN_POINTER, remoteVertex, PETSC_OWN_POINTER);CHKERRQ(ierr);
-    fprintf(stderr, "%d 0.4\n", rank);
-    MPI_Barrier(MPI_COMM_WORLD);
     if(false) {
       PetscSFView(pointSF, PETSC_VIEWER_STDOUT_WORLD);
     }
@@ -985,9 +958,6 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
       MPI_Barrier(comm);
     }
   }
-
-  fprintf(stderr, "%d 0.5\n", rank);
-  MPI_Barrier(MPI_COMM_WORLD);
 
   DM dm_int;
   ierr = DMPlexInterpolate(*dm, &dm_int);
