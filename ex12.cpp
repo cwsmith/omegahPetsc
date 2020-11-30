@@ -577,8 +577,7 @@ void getNeighborElmCounts(Omega_h::Mesh m, Omega_h::Read<int>& nborRanks,
 const int numVertsPerTri = 3;
 
 //FIXME - create the array on the gpu
-void getPicPartCoreElmToVtxArray(Omega_h::Mesh &mesh, int& numCells, std::vector<int>& global_cell) {
-  const int rank = mesh.comm()->rank();
+void getPicPartCoreElmToVtxArray(Omega_h::Mesh &mesh, const int rank, int& numCells, std::vector<int>& global_cell) {
   auto ownership_elem_d = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
   Omega_h::HostRead<Omega_h::LO> ownership_elem(ownership_elem_d);
   numCells = std::count(ownership_elem.data(), ownership_elem.data()+ownership_elem.size(), rank);
@@ -844,7 +843,8 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   if (strcmp(options->mesh_type, "picpart") == 0)
   {
     int numCoreElms;
-    getPicPartCoreElmToVtxArray(mesh, numCoreElms, global_cell);
+    getPicPartCoreElmToVtxArray(mesh, rank, numCoreElms, global_cell);
+    numCells = numCoreElms;
     //PETSC_NEEDS_1 - 'vertexCoords'
     int numCoreVerts;
     int numOwnedCoreVerts;
@@ -974,7 +974,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     for (int i = 0; i < commSize; i++) {
       if(rank == i) {
         if(!rank)
-          std::cerr << "<rank> <quant> <omega count:petsc count>\n";
+          std::cerr << "<rank> <quant> <petsc count:omega count>\n";
         std::cerr << rank << " numCells " << cEnd-cStart << ":" << numCells << " numVerts "
           << vEnd-vStart << ":" << numVertices << "\n";
       }
