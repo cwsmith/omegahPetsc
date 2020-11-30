@@ -748,7 +748,6 @@ void getPicPartCoreVtxOwnerIdx(Omega_h::Mesh &mesh, const int rank,
     }
   };
   Omega_h::parallel_for(mesh.nverts(), getGhostVtxInfo);
-
   Omega_h::Dist dist;
   const auto worldComm = mesh.library()->world();
   dist.set_parent_comm(worldComm);
@@ -788,7 +787,7 @@ void getPicPartCoreVtxOwnerIdx(Omega_h::Mesh &mesh, const int rank,
   const auto ghostOwnerIdx_rd = distInv.exch(ownerIdx_rd,1);
   {
     Omega_h::HostRead<Omega_h::LO> rh(ghostOwnerIdx_rd);
-    ghostOwnerRank_rh = rh;
+    ghostOwnerIdx_rh = rh;
   }
   {
     Omega_h::HostRead<Omega_h::LO> rh(ghostVtxOwner_d);
@@ -881,18 +880,28 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     fprintf(stderr, "%d 0.1\n", rank);
     const int numCoreRmtVtx = numCoreVerts - numOwnedCoreVerts;
     numVerticesGhost = numCoreRmtVtx;
-    PetscSFNode *remoteVertex;
-    PetscInt *localVertex;
-    ierr = PetscMalloc2(numCoreVerts, &localVertex,
-                        numCoreRmtVtx, &remoteVertex);CHKERRQ(ierr);
     getPicPartCoreVtxOwnerIdx(mesh, rank, numCoreVerts, numOwnedCoreVerts, numCoreElms,
         partvtx2corevtx, ghostOwnerRank_rh, ghostOwnerIdx_rh);
+    if(numCoreRmtVtx > 0) {
+      assert(ghostOwnerRank_rh.size());
+      assert(ghostOwnerIdx_rh.size());
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
     //PETSC_NEEDS_4B - 'vtxRemoteRank'
     //create a plex object on each process from local info
     ierr = DMPlexCreateFromCellListPetsc(comm, dim, numCoreElms, 
         numCoreVerts, numVertsPerTri, PETSC_FALSE, global_cell.data(),
         dim, vertexCoords.data(), dm); CHKERRQ(ierr);
 
+    PetscInt *localVertex;
+    ierr = PetscMalloc1(numCoreRmtVtx, &localVertex);CHKERRQ(ierr);
+    PetscSFNode *remoteVertex;
+    ierr = PetscMalloc1(numCoreRmtVtx, &remoteVertex);CHKERRQ(ierr);
+    for(int i=0; i<numCoreRmtVtx; i++) {
+      localVertex[i] = numCoreElms+i;
+      remoteVertex[i].rank = ghostOwnerRank_rh[i];
+      remoteVertex[i].index = ghostOwnerIdx_rh[i];
+    }
 
     PetscSF pointSF;
     fprintf(stderr, "%d 0.2\n", rank);
