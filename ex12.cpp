@@ -750,7 +750,7 @@ void getPicPartCoreVtxOwnerIdx(Omega_h::Mesh &mesh, const int rank,
   const auto inRmts = distInv.items2dests();
   const auto inRank = inRmts.ranks; //source rank of vtx info
   const auto inIdx = inRmts.idxs; //source index of vtx info
-
+  const auto nverts = mesh.nverts();
   //find the vertex with global id 'inGid' in the local core vertex array
   //and send its local index to the remote process
   Omega_h::Write<Omega_h::LO> ownerIdx_d(inGid.size());
