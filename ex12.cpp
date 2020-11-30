@@ -750,7 +750,8 @@ void getPicPartCoreVtxOwnerIdx(Omega_h::Mesh &mesh, const int rank,
   Omega_h::parallel_for(mesh.nverts(), getGhostVtxInfo);
 
   Omega_h::Dist dist;
-  dist.set_parent_comm(mesh.comm());
+  const auto worldComm = mesh.library()->world();
+  dist.set_parent_comm(worldComm);
   Omega_h::GOs ghostVtxGid_rd(ghostVtxGid_d);
   Omega_h::Read<Omega_h::I32> ghostVtxOwner_rd(ghostVtxOwner_d);
   dist.set_dest_ranks(ghostVtxOwner_rd);
