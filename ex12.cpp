@@ -633,7 +633,7 @@ void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh, const int rank,
   const auto markCoreVerts = OMEGA_H_LAMBDA(Omega_h::LO elm) {
     if ( elmOwnership_d[elm] == rank ) {
       for(int i=0; i<numVertsPerTri; i++) {
-        const auto vtxIdx = elms2verts_d[elm+i];
+        const auto vtxIdx = elms2verts_d[(elm*numVertsPerTri)+i];
         isCoreVtx[vtxIdx] = 1;
       }
     }
@@ -646,7 +646,7 @@ void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh, const int rank,
   { //TODO replace with reduce
     Omega_h::Write<Omega_h::LO> numCoreVertices_d(1,0);
     const auto countVerts = OMEGA_H_LAMBDA(const int i) {
-       Omega_h::atomic_add(&(numCoreVertices_d[0]), isCoreVtx[i]);
+       Omega_h::atomic_add(&(numCoreVertices_d[0]), (isCoreVtx[i]==1));
     };
     Omega_h::parallel_for(mesh.nverts(), countVerts);
     Omega_h::HostRead<Omega_h::LO> numCoreVertices_hr(numCoreVertices_d);
