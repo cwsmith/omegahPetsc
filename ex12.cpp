@@ -606,7 +606,7 @@ void getPicPartCoreElmToVtxArray(Omega_h::Mesh &mesh, int& numCells, std::vector
 //petsc needs an array of vertex coordinates for all vertices in the core on
 //this process
 void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh, const int rank,
-    int& numCoreVertices, int& numOwnedVertices,
+    int& numCoreVerts, int& numOwnedCoreVerts,
     Omega_h::HostRead<Omega_h::Real>& coreVertexCoords,
     Omega_h::Read<Omega_h::LO>& partvtx2corevtx_d) {
   //read tag placed by pumipic that defines which process owns each vertex
@@ -621,11 +621,11 @@ void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh, const int rank,
     };
     Omega_h::parallel_for(vtxOwnership_d.size(), countVerts);
     Omega_h::HostRead<Omega_h::LO> numOwnedVertices_hr(numOwnedVertices_d);
-    numOwnedVertices = numOwnedVertices_hr[0];
+    numOwnedCoreVerts = numOwnedVertices_hr[0];
   }
   fprintf(stderr, "%d 1.01\n", rank);
   MPI_Barrier(MPI_COMM_WORLD);
-  assert(numOwnedVertices < mesh.nverts());
+  assert(numOwnedCoreVerts < mesh.nverts());
   //for each element owned by this rank mark the vertices bound by it as owned
   const Omega_h::Write<Omega_h::LO> isCoreVtx(mesh.nverts(),0);
   const auto elms2verts_d = mesh.ask_elem_verts();
@@ -650,7 +650,7 @@ void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh, const int rank,
     };
     Omega_h::parallel_for(mesh.nverts(), countVerts);
     Omega_h::HostRead<Omega_h::LO> numCoreVertices_hr(numCoreVertices_d);
-    numCoreVertices = numCoreVertices_hr[0];
+    numCoreVerts = numCoreVertices_hr[0];
   }
 
   fprintf(stderr, "%d 1.03\n", rank);
@@ -658,13 +658,13 @@ void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh, const int rank,
   //create an array for the coordinates of vertices on this rank
   const auto numPartVerts = mesh.nverts();
   auto coords = mesh.coords();
-  Omega_h::Write<Omega_h::Real> coreVtxCoords_d(numCoreVertices*2);
+  Omega_h::Write<Omega_h::Real> coreVtxCoords_d(numCoreVerts*2);
   Omega_h::Write<Omega_h::LO> vtxMap_wd(numPartVerts,-1);
   Omega_h::Write<Omega_h::LO> vtxIdx(1,0);
   const auto getCoordinatesAndMap = OMEGA_H_LAMBDA(Omega_h::LO vtx) {
     if ( isCoreVtx[vtx] ) {
       const auto idx = Omega_h::atomic_fetch_add(&(vtxIdx[0]), 1); 
-      if(vtx>=numPartVerts) printf("vtx %d numCoreVertices %d\n", vtx, numPartVerts);
+      if(vtx>=numPartVerts) printf("vtx %d numCoreVerts %d\n", vtx, numPartVerts);
       assert(vtx<numPartVerts);
       vtxMap_wd[vtx] = idx;
       coreVtxCoords_d[idx*2] = coords[vtx*2];
