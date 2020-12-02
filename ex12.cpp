@@ -518,29 +518,17 @@ static PetscErrorCode CreateBCLabel(DM dm, const char name[])
   PetscFunctionReturn(0);
 }
 
-static MPI_Comm MST_communicator(MPI_Comm comm, int &exclude_proc, int &commSize)
+static MPI_Comm MST_communicator(MPI_Comm comm, std::vector<int> &include_proc, int &commSize)
 {
-  // Gather all the excluded process id onto all ranks
-  int* exclude_proc_array = new int [commSize];
-  MPI_Allgather(&exclude_proc, 1, MPI_INT, exclude_proc_array, 1, MPI_INT, comm);
-
-  std::vector<int> exclude_proc_vector(exclude_proc_array, exclude_proc_array + commSize);
-  
-  // Erase the process ids that doesn't need to be excluded
-  exclude_proc_vector.erase(std::remove(exclude_proc_vector.begin(), exclude_proc_vector.end(), -1), 
-                            exclude_proc_vector.end());
-
   MPI_Group world_group;
   MPI_Comm_group(comm, &world_group);
 
-  // Remove all unnecessary ranks
+  // Include only necessary ranks
   MPI_Group MST_group;
-  MPI_Group_excl(world_group, exclude_proc_vector.size(), exclude_proc_vector.data(), &MST_group);
+  MPI_Group_incl(world_group, include_proc.size(), include_proc.data(), &MST_group);
 
   MPI_Comm MST_comm;
   MPI_Comm_create(comm, MST_group, &MST_comm);
-
-  delete[] exclude_proc_array;
 
   return MST_comm;
 }
@@ -569,41 +557,34 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   int min_class_id = *std::min_element(class_id_elem.data(), class_id_elem.data()+class_id_elem.size());
   printf("rank: %d, min_class: %d, max_class: %d\n", rank, min_class_id, max_class_id);
  
-  Omega_h::HostRead<Omega_h::LO> ownership_elem;
-  Omega_h::HostRead<Omega_h::LO> ownership_vert;
-  int current_max_class_id; // Keep track of the current highest class id of the selected picparts
-  int exclude_proc = -1; // Not disabled processes have -1
+  // Gather the min and max class id across all processes 
+  // The index is the rank associated with that class id 
+  int* min_class_id_array = new int[commSize];
+  int* max_class_id_array = new int[commSize];
+  MPI_Allgather(&min_class_id, 1, MPI_INT, min_class_id_array, 1, MPI_INT, comm);
+  MPI_Allgather(&max_class_id, 1, MPI_INT, max_class_id_array, 1, MPI_INT, comm);
 
+  // Determine the active ranks 
+  std::vector<int> include_proc;
+  int current_max_class_id = 0;
   for (int i = 0; i < commSize; i++)
   {
-    if (rank == i)
+    if (min_class_id_array[i] > current_max_class_id)
     {
-      // If this picpart does not intersect with the previously selected picparts
-      // Always use the first picpart
-      if (min_class_id > current_max_class_id || rank == 0)
-      {
-        ownership_elem = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
-        ownership_vert = mesh.get_array<Omega_h::LO>(0, "ownership");
-        current_max_class_id = max_class_id;
-      }
-      else
-      {
-        exclude_proc = i;
-      }
+      include_proc.push_back(i);
+      current_max_class_id = max_class_id_array[i];
     }
-    MPI_Bcast(&current_max_class_id, 1, MPI_INT, i, comm);
   }
   // Use the last picpart to add the remaining part of the mesh if needed
-  if (rank == commSize - 1 && current_max_class_id != max_class_id) 
+  if (current_max_class_id != max_class_id_array[commSize-1]) 
   {
-    ownership_elem = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
-    ownership_vert = mesh.get_array<Omega_h::LO>(0, "ownership");
-
-    // No longer disabling the last process
-    exclude_proc = -1;
+    include_proc.push_back(commSize-1);
   }
+  
+  delete[] min_class_id_array;
+  delete[] max_class_id_array;
 
-  MPI_Comm MST_comm = MST_communicator(comm, exclude_proc, commSize);
+  MPI_Comm MST_comm = MST_communicator(comm, include_proc, commSize);
   int MST_rank, MST_commSize;
   MPI_Comm_rank(MST_comm, &MST_rank);
   MPI_Comm_size(MST_comm, &MST_commSize);
@@ -611,6 +592,9 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
 
   if (MST_comm != MPI_COMM_NULL)
   {
+    Omega_h::HostRead<Omega_h::LO> ownership_elem = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
+    Omega_h::HostRead<Omega_h::LO> ownership_vert = mesh.get_array<Omega_h::LO>(0, "ownership");
+
     // Get the vertices to cell adjacency
     Omega_h::Read<Omega_h::LO> cell = mesh.ask_elem_verts();
 
