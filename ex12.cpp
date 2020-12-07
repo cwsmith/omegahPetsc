@@ -577,6 +577,7 @@ void getNeighborElmCounts(Omega_h::Mesh m, Omega_h::Read<int>& nborRanks,
 const int numVertsPerTri = 3;
 
 //FIXME - create the array on the gpu
+//FIXME - the vertex ids are local, but need to be mapped to a range of 0:numCoreVertices
 void getPicPartCoreElmToVtxArray(Omega_h::Mesh &mesh, const int rank, int& numCells, std::vector<int>& global_cell) {
   auto ownership_elem_d = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
   Omega_h::HostRead<Omega_h::LO> ownership_elem(ownership_elem_d);
@@ -594,12 +595,6 @@ void getPicPartCoreElmToVtxArray(Omega_h::Mesh &mesh, const int rank, int& numCe
     }
   }
   assert(global_cell.size() == static_cast<size_t>(numVertsPerTri*numCells));
-  // Change the local to global vertex id for adjacency
-  auto global_vertex = mesh.get_array<Omega_h::GO>(0, "gids");
-  for (unsigned int i = 0; i < global_cell.size(); i++)
-  {
-    global_cell[i] = global_vertex[global_cell[i]];
-  }
 }
 
 //petsc needs an array of vertex coordinates for all vertices in the core on
@@ -844,11 +839,13 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   {
     int numCoreElms;
     getPicPartCoreElmToVtxArray(mesh, rank, numCoreElms, global_cell);
+    assert(numCoreElms);
     numCells = numCoreElms;
     //PETSC_NEEDS_1 - 'vertexCoords'
     int numCoreVerts;
     int numOwnedCoreVerts;
     getPicPartCoreVtxCoords(mesh, rank, numCoreVerts, numOwnedCoreVerts, vertexCoords, partvtx2corevtx);
+    fprintf(stderr, "%d vertexCoords.size() %d\n", rank, vertexCoords.size());
     numVertices = numCoreVerts;
     numOwnedVertices = numOwnedCoreVerts;
     MPI_Allreduce(&numOwnedVertices, &numGlobalVerts, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
