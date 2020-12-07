@@ -578,6 +578,8 @@ const int numVertsPerTri = 3;
 
 //FIXME - create the array on the gpu
 //FIXME - the vertex ids are local, but need to be mapped to a range of 0:numCoreVertices
+//FIXME - this should use an adjacency based reordering? the xgc vertex
+//        numbering appears to have a specific pattern we may need to preserve
 void getPicPartCoreElmToVtxArray(Omega_h::Mesh &mesh, const int rank, int& numCells, std::vector<int>& global_cell) {
   auto ownership_elem_d = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
   Omega_h::HostRead<Omega_h::LO> ownership_elem(ownership_elem_d);
@@ -595,6 +597,41 @@ void getPicPartCoreElmToVtxArray(Omega_h::Mesh &mesh, const int rank, int& numCe
     }
   }
   assert(global_cell.size() == static_cast<size_t>(numVertsPerTri*numCells));
+  // Create local ids for the vertices in the core - despite what the petsc
+  // documnentation says for DMPlexBuildFromCellList, it requires vertices on
+  // the process to be numbered from 0 to numVertices-1
+  // https://www.mcs.anl.gov/petsc/petsc-current/docs/manualpages/DMPLEX/DMPlexBuildFromCellList.html#DMPlexBuildFromCellList
+  // Change the picpart local vertex ids to core local vertex ids
+  Omega_h::HostRead<Omega_h::LO> rank_lids(mesh.get_array<Omega_h::LO>(0, "rank_lids"));
+  Omega_h::HostRead<Omega_h::LO> vtxOwner(mesh.get_array<Omega_h::LO>(0, "ownership"));
+  std::vector<int> bdryVerts;
+  int maxId = 0;
+  for (unsigned int i = 0; i < global_cell.size(); i++)
+  {
+    const auto vtxId = global_cell[i];
+    if(vtxOwner[vtxId] != rank) {
+      bdryVerts.push_back(i);
+    } else {
+      const auto lid = rank_lids[vtxId];
+      global_cell[i] = lid;
+      if( lid > maxId ) maxId = lid;
+    }
+  }
+  const int ownedMaxId = maxId;
+  //renumber the boundary vertices
+  std::map<int,int> bdryGlob2Loc; //global vtx id to core local id
+  for(size_t i = 0; i<bdryVerts.size(); i++) {
+    const int idx = bdryVerts[i];
+    const int globId = global_cell[idx];
+    if(bdryGlob2Loc.count(globId)) {
+      global_cell[idx] = bdryGlob2Loc[globId];
+    } else {
+      maxId++;
+      bdryGlob2Loc[globId] = maxId;
+      global_cell[idx] = maxId;
+    }
+  }
+  fprintf(stderr, "%2d ownedMaxId %6d maxId %6d bdryVerts %4zu\n", rank, ownedMaxId, maxId, bdryVerts.size());
 }
 
 //petsc needs an array of vertex coordinates for all vertices in the core on
