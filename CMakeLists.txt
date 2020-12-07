@@ -103,6 +103,7 @@ mpiTest(picpart 4 ./ex12
   -snes_view
   -dm_view vtk:24k_dm.vtu:vtk_vtu
   -dm_plex_check_all
+  -dm_plex_check_cones_conform_on_interfaces_verbose
   ${petscArgs})
 
 mpiTest(picpart 24 ./ex12
