@@ -101,7 +101,8 @@ mpiTest(picpart 4 ./ex12
   -picpart_path ${CMAKE_SOURCE_DIR}/xgc-picparts/24k/4p/picpart
   -vec_view vtk:24k_pic4_sol.vtu:vtk_vtu
   -snes_view
-  -debug 1
+  -dm_view vtk:24k_dm.vtu:vtk_vtu
+  -dm_plex_check_all
   ${petscArgs})
 
 mpiTest(picpart 24 ./ex12
