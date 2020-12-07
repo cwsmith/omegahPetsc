@@ -749,7 +749,6 @@ void getPicPartCoreVtxOwnerIdx(Omega_h::Mesh &mesh, const int rank,
   const auto findIdxOfGid = OMEGA_H_LAMBDA(Omega_h::LO i) {
     const auto coreIdx = partvtx2corevtx_rd[i];
     const auto vtxGid = vtxGids_d[i];
-    assert(vtxGid>=0 && vtxGid<nverts);
     //look for ghosts with matching Gids, there is no race condition
     //since each vtx can appear exactly once in the local picpart mesh
     for(int j=0; j<numGhostsReceived; j++) {
