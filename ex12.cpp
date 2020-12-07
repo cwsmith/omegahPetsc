@@ -863,8 +863,6 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     numVertices = numCoreVerts;
     numOwnedVertices = numOwnedCoreVerts;
     MPI_Allreduce(&numOwnedVertices, &numGlobalVerts, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
-    //Omega_h::Read<Omega_h::I32> coreVtxOwnRank;
-    //getPicPartCoreVtxOwnerRanks(mesh, rank, numCoreVerts, partvtx2corevtx, coreVtxOwnRank);
     Omega_h::Read<Omega_h::LO> coreVtxOwnIdx;
     //PETSC_NEEDS_4A - 'vtxRemoteIdx'
     Omega_h::HostRead<Omega_h::LO> ghostOwnerRank_rh;
