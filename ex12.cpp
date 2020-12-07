@@ -895,6 +895,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     ierr = DMGetPointSF(*dm, &pointSF);CHKERRQ(ierr);
     ierr = PetscSFSetGraph(pointSF, numCoreElms+numCoreVerts, numCoreRmtVtx,
         localVertex, PETSC_OWN_POINTER, remoteVertex, PETSC_OWN_POINTER);CHKERRQ(ierr);
+    ierr = DMSetFromOptions(*dm);CHKERRQ(ierr);
     ierr = DMViewFromOptions(*dm, NULL, "-dm_view");CHKERRQ(ierr);
     if(false) {
       PetscSFView(pointSF, PETSC_VIEWER_STDOUT_WORLD);
