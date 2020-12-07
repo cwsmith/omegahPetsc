@@ -580,7 +580,9 @@ const int numVertsPerTri = 3;
 //FIXME - the vertex ids are local, but need to be mapped to a range of 0:numCoreVertices
 //FIXME - this should use an adjacency based reordering? the xgc vertex
 //        numbering appears to have a specific pattern we may need to preserve
-void getPicPartCoreElmToVtxArray(Omega_h::Mesh &mesh, const int rank, int& numCells, std::vector<int>& cells2verts) {
+// bdryGlob2Loc (in/out) map from global vtx id to core local vtx id
+void getPicPartCoreElmToVtxArray(Omega_h::Mesh &mesh, const int rank, int& numCells,
+    Omega_h::Read<Omega_h::LO>& partvtx2corevtx_d, std::vector<int>& cells2verts) {
   auto ownership_elem_d = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
   Omega_h::HostRead<Omega_h::LO> ownership_elem(ownership_elem_d);
   numCells = std::count(ownership_elem.data(), ownership_elem.data()+ownership_elem.size(), rank);
@@ -591,47 +593,22 @@ void getPicPartCoreElmToVtxArray(Omega_h::Mesh &mesh, const int rank, int& numCe
   {
     if (ownership_elem[i] == rank)
     {
-      cells2verts.push_back(cell[3*i]);
-      cells2verts.push_back(cell[3*i+1]);
-      cells2verts.push_back(cell[3*i+2]);
+      for(int j=0; j<numVertsPerTri; j++) {
+        // Create local ids for the vertices in the core.
+        // The petsc documentation says that DMPlexBuildFromCellList requires vertices on
+        // the process to use 'global ids'.
+        // We normally define 'global ids' as a unique number for each vertex that is
+        // consistent across all processes.
+        // Petsc requires the vertices to be numbered from 0 to numVertices-1,
+        // where numVertices is the number of vertices owned by this process.
+        // Change the picpart local vertex ids to core local vertex ids.
+        const auto partVtxId = cell[3*i+j];
+        const auto coreVtxId = partvtx2corevtx_d[partVtxId];
+        cells2verts.push_back(coreVtxId);
+      }
     }
   }
   assert(cells2verts.size() == static_cast<size_t>(numVertsPerTri*numCells));
-  // Create local ids for the vertices in the core - despite what the petsc
-  // documnentation says for DMPlexBuildFromCellList, it requires vertices on
-  // the process to be numbered from 0 to numVertices-1
-  // https://www.mcs.anl.gov/petsc/petsc-current/docs/manualpages/DMPLEX/DMPlexBuildFromCellList.html#DMPlexBuildFromCellList
-  // Change the picpart local vertex ids to core local vertex ids
-  Omega_h::HostRead<Omega_h::LO> rank_lids(mesh.get_array<Omega_h::LO>(0, "rank_lids"));
-  Omega_h::HostRead<Omega_h::LO> vtxOwner(mesh.get_array<Omega_h::LO>(0, "ownership"));
-  std::vector<int> bdryVerts;
-  int maxId = 0;
-  for (unsigned int i = 0; i < cells2verts.size(); i++)
-  {
-    const auto vtxId = cells2verts[i];
-    if(vtxOwner[vtxId] != rank) {
-      bdryVerts.push_back(i);
-    } else {
-      const auto lid = rank_lids[vtxId];
-      cells2verts[i] = lid;
-      if( lid > maxId ) maxId = lid;
-    }
-  }
-  const int ownedMaxId = maxId;
-  //renumber the boundary vertices
-  std::map<int,int> bdryGlob2Loc; //global vtx id to core local id
-  for(size_t i = 0; i<bdryVerts.size(); i++) {
-    const int idx = bdryVerts[i];
-    const int globId = cells2verts[idx];
-    if(bdryGlob2Loc.count(globId)) {
-      cells2verts[idx] = bdryGlob2Loc[globId];
-    } else {
-      maxId++;
-      bdryGlob2Loc[globId] = maxId;
-      cells2verts[idx] = maxId;
-    }
-  }
-  fprintf(stderr, "%2d ownedMaxId %6d maxId %6d bdryVerts %4zu\n", rank, ownedMaxId, maxId, bdryVerts.size());
 }
 
 //petsc needs an array of vertex coordinates for all vertices in the core on
@@ -874,14 +851,14 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   Omega_h::Read<int> nborElmCnts;
   if (strcmp(options->mesh_type, "picpart") == 0)
   {
-    int numCoreElms;
-    getPicPartCoreElmToVtxArray(mesh, rank, numCoreElms, cells2verts);
-    assert(numCoreElms);
-    numCells = numCoreElms;
     //PETSC_NEEDS_1 - 'vertexCoords'
     int numCoreVerts;
     int numOwnedCoreVerts;
     getPicPartCoreVtxCoords(mesh, rank, numCoreVerts, numOwnedCoreVerts, vertexCoords, partvtx2corevtx);
+    int numCoreElms;
+    getPicPartCoreElmToVtxArray(mesh, rank, numCoreElms, partvtx2corevtx, cells2verts);
+    assert(numCoreElms);
+    numCells = numCoreElms;
     fprintf(stderr, "%d vertexCoords.size() %d\n", rank, vertexCoords.size());
     numVertices = numCoreVerts;
     numOwnedVertices = numOwnedCoreVerts;
@@ -920,6 +897,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     ierr = DMGetPointSF(*dm, &pointSF);CHKERRQ(ierr);
     ierr = PetscSFSetGraph(pointSF, numCoreElms+numCoreVerts, numCoreRmtVtx,
         localVertex, PETSC_OWN_POINTER, remoteVertex, PETSC_OWN_POINTER);CHKERRQ(ierr);
+    ierr = DMViewFromOptions(*dm, NULL, "-dm_view");CHKERRQ(ierr);
     if(false) {
       PetscSFView(pointSF, PETSC_VIEWER_STDOUT_WORLD);
     }
