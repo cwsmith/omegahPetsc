@@ -726,10 +726,6 @@ void getPicPartCoreVtxOwnerIdx(Omega_h::Mesh &mesh, const int rank,
       ghostVtx2coreVtx_d[idx] = coreIdx;
       ghostVtxGid_d[idx] = vtxGids_d[i];
       ghostVtxOwner_d[idx] = vtxOwner_d[i];
-      if(vtxGids_d[i] == 13 || vtxGids_d[i] == 556) {
-        printf("%d gid %ld ownerRank %d lid %d coreIdx %d ghostIdx %d\n",
-                rank, vtxGids_d[i], vtxOwner_d[i], i, coreIdx, idx);
-      }
     }
   };
   Omega_h::parallel_for(mesh.nverts(), getGhostVtxInfo);
@@ -738,15 +734,6 @@ void getPicPartCoreVtxOwnerIdx(Omega_h::Mesh &mesh, const int rank,
   dist.set_parent_comm(worldComm);
   Omega_h::GOs ghostVtxGid_rd(ghostVtxGid_d);
   Omega_h::Read<Omega_h::I32> ghostVtxOwner_rd(ghostVtxOwner_d);
-  /*
-  for(int r=0; r<4; r++) {
-    if(r == rank) {
-      print(rank, "ghostVtxOwner_rd", ghostVtxOwner_rd);
-      print(rank, "ghostVtxGid_rd", ghostVtxGid_rd);
-    }
-    MPI_Barrier(MPI_COMM_WORLD);
-  }
-  */
   dist.set_dest_ranks(ghostVtxOwner_rd);
   dist.set_dest_globals(ghostVtxGid_rd);
   //non-owners send GID (and local idx) to owners - owners don't know
@@ -755,15 +742,6 @@ void getPicPartCoreVtxOwnerIdx(Omega_h::Mesh &mesh, const int rank,
   const auto distInv = dist.invert();
   const auto inRmts = distInv.items2dests();
   const auto inRank = inRmts.ranks; //source rank of vtx info
-  for(int r=0; r<4; r++) {
-    if(r == rank) {
-      print(rank, "inRank", inRank);
-      print(rank, "inGid", inGid);
-    }
-    MPI_Barrier(MPI_COMM_WORLD);
-  }
-  if(!rank) fprintf(stderr,"\n");
-  const auto nverts = mesh.nverts();
   //find the vertex with global id 'inGid' in the local core vertex array
   //and send its local index to the remote process
   Omega_h::Write<Omega_h::LO> ownerIdx_d(inGid.size());
@@ -779,10 +757,6 @@ void getPicPartCoreVtxOwnerIdx(Omega_h::Mesh &mesh, const int rank,
       if ( vtxGid == inGid[j] ) {
         assert(coreIdx>=0);
         ownerIdx_d[j] = numCoreElms + coreIdx; //PETSC_NEEDS_4A
-        if(vtxGid == 13 || vtxGid == 556) {
-          printf("%d gid %ld numCoreElms %d lid %d coreIdx %d\n",
-                  rank, vtxGid, numCoreElms, i, coreIdx);
-        }
       }
     }
   };
@@ -802,14 +776,6 @@ void getPicPartCoreVtxOwnerIdx(Omega_h::Mesh &mesh, const int rank,
   {
     Omega_h::HostRead<Omega_h::LO> rh(ghostVtx2coreVtx_d);
     ghostOwnerLocIdx_rh = rh;
-  }
-  for(int r=0; r<4; r++) {
-    if(r == rank) {
-      print(rank, "ghostOwnerRank_rh", ghostOwnerRank_rh);
-      print(rank, "ghostOwnerIdx_rh", ghostOwnerIdx_rh);
-      print(rank, "ghostOwnerLocIdx_rh", ghostOwnerLocIdx_rh);
-    }
-    MPI_Barrier(MPI_COMM_WORLD);
   }
 }
 
