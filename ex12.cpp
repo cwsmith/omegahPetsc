@@ -706,6 +706,7 @@ void print(const int rank, std::string key, T arr_d) {
 void getPicPartCoreVtxOwnerIdx(Omega_h::Mesh &mesh, const int rank,
     const int numCoreVerts, const int numCoreOwnedVerts, const int numCoreElms,
     Omega_h::Read<Omega_h::LO>& partvtx2corevtx_rd,
+    Omega_h::HostRead<Omega_h::LO>& ghostOwnerLocIdx_rh,
     Omega_h::HostRead<Omega_h::LO>& ghostOwnerRank_rh,
     Omega_h::HostRead<Omega_h::LO>& ghostOwnerIdx_rh) {
   const int numCoreGhostVerts = numCoreVerts - numCoreOwnedVerts;
@@ -798,10 +799,15 @@ void getPicPartCoreVtxOwnerIdx(Omega_h::Mesh &mesh, const int rank,
     Omega_h::HostRead<Omega_h::LO> rh(ghostVtxOwner_d);
     ghostOwnerRank_rh = rh;
   }
+  {
+    Omega_h::HostRead<Omega_h::LO> rh(ghostVtx2coreVtx_d);
+    ghostOwnerLocIdx_rh = rh;
+  }
   for(int r=0; r<4; r++) {
     if(r == rank) {
       print(rank, "ghostOwnerRank_rh", ghostOwnerRank_rh);
       print(rank, "ghostOwnerIdx_rh", ghostOwnerIdx_rh);
+      print(rank, "ghostOwnerLocIdx_rh", ghostOwnerLocIdx_rh);
     }
     MPI_Barrier(MPI_COMM_WORLD);
   }
@@ -880,12 +886,13 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     numOwnedVertices = numOwnedCoreVerts;
     MPI_Allreduce(&numOwnedVertices, &numGlobalVerts, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
     //PETSC_NEEDS_4A - 'vtxRemoteIdx'
+    Omega_h::HostRead<Omega_h::LO> ghostOwnerLocIdx_rh;
     Omega_h::HostRead<Omega_h::LO> ghostOwnerRank_rh;
     Omega_h::HostRead<Omega_h::LO> ghostOwnerIdx_rh;
     const int numCoreRmtVtx = numCoreVerts - numOwnedCoreVerts;
     numVerticesGhost = numCoreRmtVtx;
     getPicPartCoreVtxOwnerIdx(mesh, rank, numCoreVerts, numOwnedCoreVerts, numCoreElms,
-        partvtx2corevtx, ghostOwnerRank_rh, ghostOwnerIdx_rh);
+        partvtx2corevtx, ghostOwnerLocIdx_rh, ghostOwnerRank_rh, ghostOwnerIdx_rh);
     if(numCoreRmtVtx > 0) {
       assert(ghostOwnerRank_rh.size());
       assert(ghostOwnerIdx_rh.size());
@@ -901,7 +908,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     PetscSFNode *remoteVertex;
     ierr = PetscMalloc1(numCoreRmtVtx, &remoteVertex);CHKERRQ(ierr);
     for(int i=0; i<numCoreRmtVtx; i++) {
-      localVertex[i] = numCoreElms+i;
+      localVertex[i] = numCoreElms+ghostOwnerLocIdx_rh[i];
       remoteVertex[i].rank = ghostOwnerRank_rh[i];
       remoteVertex[i].index = ghostOwnerIdx_rh[i];
     }
