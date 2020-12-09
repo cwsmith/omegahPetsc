@@ -533,6 +533,46 @@ static MPI_Comm MST_communicator(MPI_Comm comm, std::vector<int> &include_proc, 
   return MST_comm;
 }
 
+static void getModelFacePartition(MPI_Comm comm, const int &commSize, std::vector<int> &include_proc, 
+                                    int &current_max_class_id, int &max_class_id, int &min_class_id) 
+{
+  // Gather the min and max class id across all processes 
+  // The index is the rank associated with that class id 
+  int* min_class_id_array = new int[commSize];
+  int* max_class_id_array = new int[commSize];
+  MPI_Allgather(&min_class_id, 1, MPI_INT, min_class_id_array, 1, MPI_INT, comm);
+  MPI_Allgather(&max_class_id, 1, MPI_INT, max_class_id_array, 1, MPI_INT, comm);
+
+  for (int i = 0; i < commSize-1; i++)
+  {
+    assert(min_class_id_array[i] <= min_class_id_array[i+1]);
+    assert(max_class_id_array[i] <= max_class_id_array[i+1]);
+  }
+  
+  // Determine the active ranks 
+  for (int i = 0; i < commSize; i++)
+  {
+    if (min_class_id_array[i] == 1 && current_max_class_id < max_class_id_array[i])
+    {
+      current_max_class_id = max_class_id_array[i];
+      include_proc[0] = i;
+    }
+    else if (min_class_id_array[i] > current_max_class_id)
+    {
+      include_proc.push_back(i);
+      current_max_class_id = max_class_id_array[i];
+    }
+  }
+  // Use the last picpart to add the remaining part of the mesh if needed
+  if (current_max_class_id != max_class_id_array[commSize-1]) 
+  {
+    include_proc.push_back(commSize-1);
+  }
+  
+  delete[] min_class_id_array;
+  delete[] max_class_id_array;
+}
+
 static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
 {
   assert(options->dim == 2);
@@ -557,32 +597,9 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   int min_class_id = *std::min_element(class_id_elem.data(), class_id_elem.data()+class_id_elem.size());
   printf("rank: %d, min_class: %d, max_class: %d\n", rank, min_class_id, max_class_id);
  
-  // Gather the min and max class id across all processes 
-  // The index is the rank associated with that class id 
-  int* min_class_id_array = new int[commSize];
-  int* max_class_id_array = new int[commSize];
-  MPI_Allgather(&min_class_id, 1, MPI_INT, min_class_id_array, 1, MPI_INT, comm);
-  MPI_Allgather(&max_class_id, 1, MPI_INT, max_class_id_array, 1, MPI_INT, comm);
-
-  // Determine the active ranks 
-  std::vector<int> include_proc;
+  std::vector<int> include_proc(1);
   int current_max_class_id = 0;
-  for (int i = 0; i < commSize; i++)
-  {
-    if (min_class_id_array[i] > current_max_class_id)
-    {
-      include_proc.push_back(i);
-      current_max_class_id = max_class_id_array[i];
-    }
-  }
-  // Use the last picpart to add the remaining part of the mesh if needed
-  if (current_max_class_id != max_class_id_array[commSize-1]) 
-  {
-    include_proc.push_back(commSize-1);
-  }
-  
-  delete[] min_class_id_array;
-  delete[] max_class_id_array;
+  getModelFacePartition(comm, commSize, include_proc, current_max_class_id, max_class_id, min_class_id);
 
   MPI_Comm MST_comm = MST_communicator(comm, include_proc, commSize);
   int MST_rank, MST_commSize;
@@ -660,7 +677,6 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
       }
     }
 
-    fprintf(stderr, "rank: %d, numCells: %d, numVertices: %d\n", rank, numCells, numOwnedVertices);
     fprintf(stderr, "rank: %d, Min(GlobalVtxId): %d, Max(GlobalVtxId): %d\n", rank, 
           *std::min_element(core_cell.begin(), core_cell.end()), 
           *std::max_element(core_cell.begin(), core_cell.end()));
@@ -729,7 +745,8 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     ierr = DMPlexCreateFromCellListParallelPetsc(MST_comm, dim, numCells, numLocalVerts, numGlobalVerts, 
           numCorners, PETSC_TRUE, core_cell.data(), dim, coords, &sfVert, dm);CHKERRQ(ierr);
 
-    printf("rank: %d, numCells: %d, numLocalVertices: %d, core_cell: %d\n", MST_rank, numCells, numLocalVerts, core_cell.size());
+    printf("rank: %d, numCells: %d, numLocalVertices: %d, numOwnedVertices: %d, core_cell: %d\n", 
+            rank, numCells, numLocalVerts, numOwnedVertices, core_cell.size());
 
     // Get the starting and ending index for the topology
     PetscInt cStart, cEnd, vStart, vEnd, eStart, eEnd;
