@@ -9,12 +9,14 @@ pkg_check_modules(PETSC REQUIRED IMPORTED_TARGET PETSc>3.7.0)
 
 #hack to remove '-Werror' flag - petsc ex12 has many unused function variables
 get_property(ohFlags TARGET Omega_h::omega_h PROPERTY INTERFACE_COMPILE_OPTIONS)
-list(GET ohFlags 0 ohFlags0)
-string(REPLACE "-Werror," "" ohFlags0Mod ${ohFlags0})
-list(GET ohFlags 1 ohFlags1)
-list(APPEND ohFlags0Mod ${ohFlags1})
+set(ohFlagsMod)
+foreach(flags IN LISTS ohFlags)
+  string(REPLACE "-Werror," "" flagsMod ${flags})
+  list(APPEND ohFlagsMod ${flagsMod})
+endforeach()
 set_property(TARGET Omega_h::omega_h PROPERTY
-  INTERFACE_COMPILE_OPTIONS "${ohFlags0Mod}")
+  INTERFACE_COMPILE_OPTIONS "${ohFlagsMod}")
+message(STATUS "omegah flagsFinal ${ohFlagsMod}")
 
 option(OMEGAH_PETSC_USE_CUDA OFF)
 if(OMEGAH_PETSC_USE_CUDA AND NOT Omega_h_USE_CUDA)
