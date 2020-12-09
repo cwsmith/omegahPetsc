@@ -16,7 +16,6 @@ foreach(flags IN LISTS ohFlags)
 endforeach()
 set_property(TARGET Omega_h::omega_h PROPERTY
   INTERFACE_COMPILE_OPTIONS "${ohFlagsMod}")
-message(STATUS "omegah flagsFinal ${ohFlagsMod}")
 
 option(OMEGAH_PETSC_USE_CUDA OFF)
 if(OMEGAH_PETSC_USE_CUDA AND NOT Omega_h_USE_CUDA)
