@@ -583,15 +583,18 @@ const int numVertsPerTri = 3;
 //Should this use an adjacency based reordering? the xgc vertex
 //  numbering appears to have a specific pattern we may need to preserve
 void getPicPartCoreElmToVtxArray(Omega_h::Mesh &mesh, const int rank, int& numCells,
-    Omega_h::LOs partvtx2corevtx, Omega_h::HostRead<Omega_h::LO>& corecells2verts_hr) {
+    Omega_h::LOs& partvtx2corevtx, Omega_h::HostRead<Omega_h::LO>& corecells2verts_hr) {
   const auto ownership_elem_d = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
   const auto isOwned = Omega_h::each_eq_to(ownership_elem_d,rank);
+  const auto partElm2CoreElm = Omega_h::offset_scan(isOwned);
   numCells = Omega_h::get_sum(isOwned);
   // Get the vertices to cell adjacency
   auto partcells2verts = mesh.ask_elem_verts();
   // Get the core of the picpart
+  const Omega_h::Write<Omega_h::LO> corecells2verts(numCells*numVertsPerTri,0);
+  const auto pv2cvSz = partvtx2corevtx.size();
   const auto getCoreCells2Verts = OMEGA_H_LAMBDA(Omega_h::LO i) {
-    if (ownership_elem_d[i] == rank) {
+    if( isOwned[i] ) {
       for(int j=0; j<numVertsPerTri; j++) {
         // Create local ids for the vertices in the core.
         // The petsc documentation says that DMPlexBuildFromCellList requires vertices on
@@ -602,16 +605,18 @@ void getPicPartCoreElmToVtxArray(Omega_h::Mesh &mesh, const int rank, int& numCe
         // where numVertices is the number of vertices owned by this process.
         // Change the picpart local vertex ids to core local vertex ids.
         const auto partVtxId = partcells2verts[i*3+j];
+        assert(partVtxId<pv2cvSz);
         const auto coreVtxId = partvtx2corevtx[partVtxId];
         assert(coreVtxId != -1);
-        corecells2verts[i*3+j] = coreVtxId;
+        const auto coreElmIdx = partElm2CoreElm[i];
+        assert(coreElmIdx < numCells);
+        corecells2verts[coreElmIdx*3+j] = coreVtxId;
       }
     }
   };
-  Omega_h::parallel_for(ownership_elem.size(), getCoreCells2Verts);
-  Omega_h::HostRead cc2v_hr(corecells2verts);
+  Omega_h::parallel_for(ownership_elem_d.size(), getCoreCells2Verts);
+  Omega_h::HostRead<Omega_h::LO> cc2v_hr(corecells2verts);
   corecells2verts_hr = cc2v_hr;
-  assert(cells2verts.size() == static_cast<size_t>(numVertsPerTri*numCells));
 }
 
 //petsc needs an array of vertex coordinates for all vertices in the core on
@@ -619,7 +624,7 @@ void getPicPartCoreElmToVtxArray(Omega_h::Mesh &mesh, const int rank, int& numCe
 void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh, const int rank,
     int& numCoreVerts, int& numOwnedCoreVerts,
     Omega_h::HostRead<Omega_h::Real>& coreVertexCoords,
-    Omega_h::LOs partvtx2corevtx_rd) {
+    Omega_h::LOs& partvtx2corevtx_rd) {
   //read tag placed by pumipic that defines which process owns each vertex
   const auto vtxOwnership_d = mesh.get_array<Omega_h::LO>(0, "ownership");
   auto isOwned = Omega_h::each_eq_to(vtxOwnership_d,rank);
