@@ -784,11 +784,10 @@ void getPtnMeshElmToVtxArray(Omega_h::Mesh &mesh, std::vector<int>& global_cell)
   // Get the vertices to cell adjacency
   Omega_h::HostRead<Omega_h::LO> cell(mesh.ask_elem_verts());
   assert(cell.size() == numVertsPerTri*numCells);
-  Omega_h::HostRead<Omega_h::GO> global_vertex = mesh.globals(0);
   // Change the local to global vertex id for adjacency
   for (int i = 0; i < cell.size(); i++)
   {
-    global_cell.push_back(global_vertex[cell[i]]);
+    global_cell.push_back(cell[i]);
   }
 }
 
