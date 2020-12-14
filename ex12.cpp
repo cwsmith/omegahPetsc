@@ -587,7 +587,7 @@ void getPicPartCoreElmToVtxArray(Omega_h::Mesh &mesh, const int rank, int& numCe
   const auto ownership_elem_d = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
   const auto isOwned = Omega_h::each_eq_to(ownership_elem_d,rank);
   const auto partElm2CoreElm = Omega_h::offset_scan(isOwned);
-  numCells = Omega_h::get_sum(isOwned);
+  numCells = partElm2CoreElm.last();
   // Get the vertices to cell adjacency
   auto partcells2verts = mesh.ask_elem_verts();
   // Get the core of the picpart
