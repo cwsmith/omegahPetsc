@@ -9,18 +9,21 @@ pkg_check_modules(PETSC REQUIRED IMPORTED_TARGET PETSc>3.7.0)
 
 #hack to remove '-Werror' flag - petsc ex12 has many unused function variables
 get_property(ohFlags TARGET Omega_h::omega_h PROPERTY INTERFACE_COMPILE_OPTIONS)
-list(GET ohFlags 0 ohFlags0)
-string(REPLACE "-Werror," "" ohFlags0Mod ${ohFlags0})
-list(GET ohFlags 1 ohFlags1)
-list(APPEND ohFlags0Mod ${ohFlags1})
+set(ohFlagsMod)
+foreach(flags IN LISTS ohFlags)
+  string(REPLACE "-Werror," "" flagsMod ${flags})
+  list(APPEND ohFlagsMod ${flagsMod})
+endforeach()
 set_property(TARGET Omega_h::omega_h PROPERTY
-  INTERFACE_COMPILE_OPTIONS "${ohFlags0Mod}")
+  INTERFACE_COMPILE_OPTIONS "${ohFlagsMod}")
 
 option(OMEGAH_PETSC_USE_CUDA OFF)
 if(OMEGAH_PETSC_USE_CUDA AND NOT Omega_h_USE_CUDA)
   message(FATAL_ERROR "OMEGAH_PETSC_USE_CUDA cannot be enabled with a build of"
                       "Omega_h with CUDA disabled 'Omega_h_USE_CUDA=${Omega_h_USE_CUDA}'")
 endif()
+
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_executable(ex12 ex12.cpp)
 if(OMEGAH_PETSC_USE_CUDA)
@@ -51,7 +54,6 @@ set(petscArgs
   -snes_converged_reason
   ::ascii_info_detail
   -ksp_converged_reason
-  -snes_view
   -show_solution 0
   -log_view)
 
@@ -67,11 +69,13 @@ endfunction(mpiTest)
 mpiTest(24kxgc 2 ./ex12
     -mesh ${CMAKE_SOURCE_DIR}/24k.osh
     -vec_view vtk:24k_p2_sol.vtu:vtk_vtu
+    -snes_view
     ${petscArgs})
 
 mpiTest(24kxgc 4 ./ex12
     -mesh ${CMAKE_SOURCE_DIR}/24k.osh
     -vec_view vtk:24k_p4_sol.vtu:vtk_vtu
+    -snes_view
     ${petscArgs})
 
 mpiTest(box 2 ./ex12
@@ -90,16 +94,23 @@ mpiTest(box512 4 ./ex12
   -cells 512,512,0
   -mesh box
   -vec_view vtk:box_p4_sol.vtu:vtk_vtu
+  -snes_view
   ${petscArgs})
   
 mpiTest(picpart 4 ./ex12
   -mesh picpart 
   -picpart_path ${CMAKE_SOURCE_DIR}/xgc-picparts/24k/4p/picpart
   -vec_view vtk:24k_pic4_sol.vtu:vtk_vtu
+  -snes_view
+  -dm_view vtk:24k_pic4_dm.vtu:vtk_vtu
+  -dm_plex_check_all
   ${petscArgs})
 
 mpiTest(picpart 24 ./ex12
   -mesh picpart
   -picpart_path ${CMAKE_SOURCE_DIR}/xgc-picparts/24k/24p/picpart
   -vec_view vtk:24k_pic24_sol.vtu:vtk_vtu
+  -snes_view
+  -dm_view vtk:24k_pic24_dm.vtu:vtk_vtu
+  -dm_plex_check_all
   ${petscArgs})
