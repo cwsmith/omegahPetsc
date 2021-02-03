@@ -533,8 +533,8 @@ static MPI_Comm MST_communicator(MPI_Comm comm, std::vector<int> &include_proc, 
   return MST_comm;
 }
 
-static void getModelFacePartition(MPI_Comm comm, const int &commSize, std::vector<int> &include_proc, 
-                                    int &current_max_class_id, int &max_class_id, int &min_class_id) 
+static void getModelFacePartition(MPI_Comm comm, const int commSize, std::vector<int> &include_proc, 
+                                    int &current_max_class_id, const int max_class_id, const int min_class_id) 
 {
   // Gather the min and max class id across all processes 
   // The index is the rank associated with that class id 
@@ -571,6 +571,39 @@ static void getModelFacePartition(MPI_Comm comm, const int &commSize, std::vecto
   
   delete[] min_class_id_array;
   delete[] max_class_id_array;
+}
+
+// To balance the mesh load on each process, split the mesh on overloaded process across 2 or more process. 
+// Need to create a map between the rank and the class id it owns
+// Should pass in MST_comm
+static void MST_balance(MPI_Comm comm, const int numCells, std::vector<int> &include_proc)
+{
+  int* numCells_array = new int[include_proc.size()];
+  MPI_Allgather(&numCells, 1, MPI_INT, numCells_array, 1, MPI_INT, comm);
+
+  int total_cells = 0;
+  for (int i = 0; i < include_proc.size(); i++)
+  {
+    total_cells += numCells_array[i];
+  }
+  
+  int avg_cells = total_cells/include_proc.size();
+
+  int new_rank_size = include_proc.size();
+  // Balance from largest numCells to smallest
+  for (int i = include_proc.size()-1; i >= 0; i++)
+  {
+    int extra_rank = 0;
+    // Solve for optimal number of extra processes
+    if (numCells_array[i] > 2*avg_cells)
+    {
+      extra_rank = numCells_array[i]/avg_cells/2-1;
+    }
+    new_rank_size += extra_rank;
+    avg_cells = total_cells/new_rank_size;
+  }
+  
+  
 }
 
 static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
