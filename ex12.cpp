@@ -24,11 +24,12 @@ Information on refinement:
 #include <Omega_h_mesh.hpp>
 #include <Omega_h_comm.hpp>
 #include <Omega_h_build.hpp>
+#include <Omega_h_filesystem.hpp>
 #include <algorithm>
 #include <vector>
 #include <set>
 #include <iostream>
-#include <Omega_h_filesystem.hpp>
+#include <map>
 
 
 typedef enum {NEUMANN, DIRICHLET, NONE} BCType;
@@ -575,35 +576,48 @@ static void getModelFacePartition(MPI_Comm comm, const int commSize, std::vector
 
 // To balance the mesh load on each process, split the mesh on overloaded process across 2 or more process. 
 // Need to create a map between the rank and the class id it owns
-// Should pass in MST_comm
-static void MST_balance(MPI_Comm comm, const int numCells, std::vector<int> &include_proc)
+// Should be used with MST_comm
+static void MST_balance(MPI_Comm MST_comm, MPI_Comm world_comm, const int rank, const int numCells, std::vector<int> &include_proc, const Omega_h::HostRead<Omega_h::LO>& class_id_elem)
 {
   int* numCells_array = new int[include_proc.size()];
-  MPI_Allgather(&numCells, 1, MPI_INT, numCells_array, 1, MPI_INT, comm);
+  MPI_Allgather(&numCells, 1, MPI_INT, numCells_array, 1, MPI_INT, MST_comm);
 
   int total_cells = 0;
-  for (int i = 0; i < include_proc.size(); i++)
+  for (unsigned int i = 0; i < include_proc.size(); i++)
   {
     total_cells += numCells_array[i];
   }
-  
+
   int avg_cells = total_cells/include_proc.size();
 
-  int new_rank_size = include_proc.size();
+  // Create a map of number of elements to each class id. The key is the class id.
+  // This map only contains the class id from the owner rank
+  std::map<int, int> numCells_to_class_id;
+  std::set<int> unique_class_id(class_id_elem.data(), class_id_elem.data()+class_id_elem.size());
+  for (int i = 0; i < class_id_elem.size(); i++)
+  {
+    int class_id = class_id_elem[i];
+    if (numCells_to_class_id.find(class_id) == numCells_to_class_id.end())
+    {
+      numCells_to_class_id[class_id] = std::count(class_id_elem.data(), class_id_elem.data()+class_id_elem.size(), class_id);
+      printf("rank: %d, class id: %d, numCells for this class id: %d\n", rank, class_id, numCells_to_class_id[class_id]);
+    }
+    
+  }
+  
+  int new_CommSize = include_proc.size();
   // Balance from largest numCells to smallest
-  for (int i = include_proc.size()-1; i >= 0; i++)
+  for (int i = include_proc.size()-1; i >= 0; i--)
   {
     int extra_rank = 0;
     // Solve for optimal number of extra processes
     if (numCells_array[i] > 2*avg_cells)
     {
-      extra_rank = numCells_array[i]/avg_cells/2-1;
+      extra_rank = numCells_array[i]/avg_cells/2;      
     }
-    new_rank_size += extra_rank;
-    avg_cells = total_cells/new_rank_size;
+    new_CommSize += extra_rank;
+    avg_cells = total_cells/new_CommSize;
   }
-  
-  
 }
 
 static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
@@ -710,6 +724,8 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
       }
     }
 
+    MST_balance(MST_comm, comm, MST_rank, numCells, include_proc, class_id_elem);
+    
     fprintf(stderr, "rank: %d, Min(GlobalVtxId): %d, Max(GlobalVtxId): %d\n", rank, 
           *std::min_element(core_cell.begin(), core_cell.end()), 
           *std::max_element(core_cell.begin(), core_cell.end()));
@@ -787,17 +803,17 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     ierr = DMPlexGetHeightStratum(*dm, 1, &eStart, &eEnd); /* edges */ 
     ierr = DMPlexGetHeightStratum(*dm, 2, &vStart, &vEnd); /* vertices */
 
-    int dm_total_cell = 0;
-    int oh_total_cell = 0;
-    int dm_cell = cEnd-cStart;
-    MPI_Allreduce(&dm_cell, &dm_total_cell, 1, MPI_INT, MPI_SUM, MST_comm);
-    MPI_Allreduce(&numCells, &oh_total_cell, 1, MPI_INT, MPI_SUM, MST_comm);
-    fprintf(stderr, "dm_rank: %d, dm_cell: %d\n", MST_rank, dm_cell);
-    if (MST_rank == 0)
-    {
-      fprintf(stderr, "dm_total_cell: %d, oh_total_cell: %d\n", dm_total_cell, oh_total_cell);
-    }
-    assert(dm_total_cell == oh_total_cell);
+    // int dm_total_cell = 0;
+    // int oh_total_cell = 0;
+    // int dm_cell = cEnd-cStart;
+    // MPI_Allreduce(&dm_cell, &dm_total_cell, 1, MPI_INT, MPI_SUM, MST_comm);
+    // MPI_Allreduce(&numCells, &oh_total_cell, 1, MPI_INT, MPI_SUM, MST_comm);
+    // fprintf(stderr, "dm_rank: %d, dm_cell: %d\n", MST_rank, dm_cell);
+    // if (MST_rank == 0)
+    // {
+    //   fprintf(stderr, "dm_total_cell: %d, oh_total_cell: %d\n", dm_total_cell, oh_total_cell);
+    // }
+    // assert(dm_total_cell == oh_total_cell);
     
 
     /* 
