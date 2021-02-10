@@ -609,13 +609,62 @@ static void MST_balance(MPI_Comm MST_comm, MPI_Comm world_comm, const int rank, 
   // Balance from largest numCells to smallest
   for (int i = include_proc.size()-1; i >= 0; i--)
   {
-    int extra_rank = 0;
-    // Solve for optimal number of extra processes
+    int extra_ranks = 0;
+
+    // 100% imbalance
     if (numCells_array[i] > 2*avg_cells)
     {
-      extra_rank = numCells_array[i]/avg_cells/2;      
+      // Bin-packing algorithm for balancing cells into new ranks
+      if (rank == i)
+      {
+        // Assignment of class id for each of the new ranks
+        std::vector< std::vector<int> > balance_class_id(1);
+        // Number of elements for each of the new ranks
+        std::vector<int> new_numCells(1, 0);
+
+        for (std::map<int, int>::iterator itr = numCells_to_class_id.begin(); itr != numCells_to_class_id.end(); itr++)
+        {
+          int j;
+          for (j = 0; j < extra_ranks+1; j++)
+          {
+            // Find the first rank that can accommodate this class id
+            if (itr->second+new_numCells[j] <= 1.5*avg_cells)
+            {
+              new_numCells[j] += itr->second;
+              balance_class_id[j].push_back(itr->first);
+              break;
+            }
+          }
+
+          // If the class id cannot fit in any current ranks
+          if (j == extra_ranks+1 && itr->second+new_numCells[j] > 1.5*avg_cells)
+          {
+            new_numCells.push_back(itr->second);
+            std::vector<int> temp; 
+            temp.push_back(itr->first);
+            balance_class_id.push_back(temp);
+            extra_ranks++;
+          }
+        }
+
+        for (int j = 0; j < new_numCells.size(); j++)
+        {
+          printf("new numCells: %d\n", new_numCells[j]);
+        }
+        for (int j = 0; j < balance_class_id.size(); j++)
+        {
+          printf("balance class id: ");
+          for (int k = 0; k < balance_class_id[j].size(); k++)
+          {
+            printf("%d ", balance_class_id[j][k]);
+          }
+          printf("\n");
+        }
+
+      }
     }
-    new_CommSize += extra_rank;
+
+    new_CommSize += extra_ranks;
     avg_cells = total_cells/new_CommSize;
   }
 }
