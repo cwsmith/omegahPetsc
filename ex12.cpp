@@ -594,15 +594,11 @@ static void MST_balance(MPI_Comm MST_comm, MPI_Comm world_comm, const int rank, 
   // This map only contains the class id from the owner rank
   std::map<int, int> numCells_to_class_id;
   std::set<int> unique_class_id(class_id_elem.data(), class_id_elem.data()+class_id_elem.size());
-  for (int i = 0; i < class_id_elem.size(); i++)
+  for (std::set<int>::iterator itr = unique_class_id.begin(); itr != unique_class_id.end(); itr++)
   {
-    int class_id = class_id_elem[i];
-    if (numCells_to_class_id.find(class_id) == numCells_to_class_id.end())
-    {
-      numCells_to_class_id[class_id] = std::count(class_id_elem.data(), class_id_elem.data()+class_id_elem.size(), class_id);
-      printf("rank: %d, class id: %d, numCells for this class id: %d\n", rank, class_id, numCells_to_class_id[class_id]);
-    }
-    
+    int class_id = *itr;
+    numCells_to_class_id[class_id] = std::count(class_id_elem.data(), class_id_elem.data()+class_id_elem.size(), class_id);
+    printf("rank: %d, class id: %d, numCells for this class id: %d\n", rank, class_id, numCells_to_class_id[class_id]);
   }
   
   int new_CommSize = include_proc.size();
