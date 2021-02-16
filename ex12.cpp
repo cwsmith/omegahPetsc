@@ -575,7 +575,6 @@ static void getModelFacePartition(MPI_Comm comm, const int commSize, std::vector
 }
 
 // To balance the mesh load on each process, split the mesh on overloaded process across 2 or more process. 
-// Need to create a map between the rank and the class id it owns
 // Should be used with MST_comm
 static void MST_balance(MPI_Comm MST_comm, MPI_Comm world_comm, const int rank, const int numCells, std::vector<int> &include_proc, const Omega_h::HostRead<Omega_h::LO>& class_id_elem)
 {
@@ -610,30 +609,27 @@ static void MST_balance(MPI_Comm MST_comm, MPI_Comm world_comm, const int rank, 
     // 100% imbalance
     if (numCells_array[i] > 2*avg_cells)
     {
-      // Bin-packing algorithm for balancing cells into new ranks
+      // Modified bin-packing algorithm for balancing class ids into new ranks
       if (rank == i)
       {
         // Assignment of class id for each of the new ranks
         std::vector< std::vector<int> > balance_class_id(1);
+        
         // Number of elements for each of the new ranks
         std::vector<int> new_numCells(1, 0);
 
         for (std::map<int, int>::iterator itr = numCells_to_class_id.begin(); itr != numCells_to_class_id.end(); itr++)
         {
-          int j;
-          for (j = 0; j < extra_ranks+1; j++)
-          {
-            // Find the first rank that can accommodate this class id
-            if (itr->second+new_numCells[j] <= 1.5*avg_cells)
-            {
-              new_numCells[j] += itr->second;
-              balance_class_id[j].push_back(itr->first);
-              break;
-            }
-          }
+          int last_index = new_numCells.size()-1;
 
-          // If the class id cannot fit in any current ranks
-          if (j == extra_ranks+1 && itr->second+new_numCells[j] > 1.5*avg_cells)
+          // Keep adding class ids to the new rank until it reaches 50% imbalance
+          // Then create another new rank
+          if (itr->second+new_numCells[last_index] <= 1.5*avg_cells)
+          {
+            new_numCells[last_index] += itr->second;
+            balance_class_id[last_index].push_back(itr->first);
+          }
+          else
           {
             new_numCells.push_back(itr->second);
             std::vector<int> temp; 
