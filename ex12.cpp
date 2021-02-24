@@ -26,7 +26,6 @@ Information on refinement:
 #include <Omega_h_mesh.hpp>
 #include <Omega_h_comm.hpp>
 #include <Omega_h_build.hpp>
-#include <Omega_h_atomics.hpp>
 #include <Omega_h_for.hpp>
 #include <Omega_h_int_scan.hpp>
 #include <Omega_h_array_ops.hpp>
