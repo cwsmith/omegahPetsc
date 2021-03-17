@@ -790,11 +790,10 @@ void getPtnMeshElmToVtxArray(Omega_h::Mesh &mesh, std::vector<int>& global_cell)
   }
 }
 
-static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
+static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options, Omega_h::Library lib)
 {
   assert(options->dim == 2);
 
-  auto lib = Omega_h::Library();
   auto mesh = Omega_h::Mesh(&lib);
 
   int rank, commSize;
@@ -1036,7 +1035,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   PetscFunctionReturn(0);
 }
 
-static PetscErrorCode CreateMesh(MPI_Comm comm, AppCtx *user, DM *dm)
+static PetscErrorCode CreateMesh(MPI_Comm comm, AppCtx *user, DM *dm, Omega_h::Library ohlib)
 {
   PetscInt       dim             = user->dim;
   const char    *filename        = user->filename;
@@ -1052,7 +1051,7 @@ static PetscErrorCode CreateMesh(MPI_Comm comm, AppCtx *user, DM *dm)
     PetscInt d;
 
     if (user->periodicity[0] || user->periodicity[1] || user->periodicity[2]) for (d = 0; d < dim; ++d) user->cells[d] = PetscMax(user->cells[d], 3);
-    ierr = CreateQuadMesh(comm, dm, user);CHKERRQ(ierr);
+    ierr = CreateQuadMesh(comm, dm, user, ohlib);CHKERRQ(ierr);
     ierr = PetscObjectSetName((PetscObject) *dm, "Mesh");CHKERRQ(ierr);
   } else {
     ierr = DMPlexCreateFromFile(comm, filename, interpolate, dm);CHKERRQ(ierr);
@@ -1491,7 +1490,10 @@ int main(int argc, char **argv)
 
   ierr = ProcessOptions(PETSC_COMM_WORLD, &user);CHKERRQ(ierr);
   ierr = SNESCreate(PETSC_COMM_WORLD, &snes);CHKERRQ(ierr);
-  ierr = CreateMesh(PETSC_COMM_WORLD, &user, &dm);CHKERRQ(ierr);
+  {
+  auto ohlib = Omega_h::Library(&argc,&argv);
+  ierr = CreateMesh(PETSC_COMM_WORLD, &user, &dm, ohlib);CHKERRQ(ierr);
+  }
   ierr = SNESSetDM(snes, dm);CHKERRQ(ierr);
   ierr = DMSetApplicationContext(dm, &user);CHKERRQ(ierr);
 
