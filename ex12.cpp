@@ -628,7 +628,7 @@ void getPicPartCoreVtxCoords(Omega_h::Mesh &mesh, const int rank,
   const auto vtxOwnership_d = mesh.get_array<Omega_h::LO>(0, "ownership");
   auto isOwned = Omega_h::each_eq_to(vtxOwnership_d,rank);
   numOwnedCoreVerts = Omega_h::get_sum(isOwned);
-  assert(numOwnedCoreVerts < mesh.nverts());
+  assert(numOwnedCoreVerts <= mesh.nverts());
   //for each element owned by this rank mark the vertices bound by it as owned
   const Omega_h::Write<Omega_h::LO> isCoreVtx(mesh.nverts(),0);
   const auto elms2verts_d = mesh.ask_elem_verts();
