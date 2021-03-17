@@ -14,6 +14,10 @@ foreach(flags IN LISTS ohFlags)
   string(REPLACE "-Werror," "" flagsMod ${flags})
   list(APPEND ohFlagsMod ${flagsMod})
 endforeach()
+if(Omega_h_USE_CUDA)
+  #hack: the omeagah install using kokkos does not pass this flag
+  list(APPEND ohFlagsMod "--extended-lambda")
+endif()
 set_property(TARGET Omega_h::omega_h PROPERTY
   INTERFACE_COMPILE_OPTIONS "${ohFlagsMod}")
 
