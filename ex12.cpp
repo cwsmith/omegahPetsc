@@ -1488,8 +1488,6 @@ int main(int argc, char **argv)
   PetscLogStageRegister("Mesh creation", &stagenum0);
   PetscLogStagePush(stagenum0);
 
-  ierr = PetscLogNestedBegin();CHKERRQ(ierr);
-
   ierr = ProcessOptions(PETSC_COMM_WORLD, &user);CHKERRQ(ierr);
   ierr = SNESCreate(PETSC_COMM_WORLD, &snes);CHKERRQ(ierr);
   {
