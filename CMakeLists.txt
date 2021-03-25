@@ -79,9 +79,6 @@ function(mpiTest TESTNAME PROCS EXE)
   )
 endfunction(mpiTest)
 
-mpiTest(markMdlBdry24kxgc 1 ./markMdlBdry
-    ${CMAKE_SOURCE_DIR}/24k.osh 24k_marked)
-
 mpiTest(24kxgc 2 ./ex12
     -mesh ${CMAKE_SOURCE_DIR}/24k.osh
     -vec_view vtk:24k_p2_sol.vtu:vtk_vtu
@@ -115,7 +112,7 @@ mpiTest(box512 4 ./ex12
   
 mpiTest(picpart 4 ./ex12
   -mesh picpart 
-  -picpart_path ${CMAKE_SOURCE_DIR}/xgc-picparts/24k/4p/picpart
+  -picpart_path ${CMAKE_SOURCE_DIR}/xgc-picparts/24k/24k_full_bfs_4.ppm/24k_full_bfs_
   -vec_view vtk:24k_pic4_sol.vtu:vtk_vtu
   -snes_view
   -dm_view vtk:24k_pic4_dm.vtu:vtk_vtu
@@ -124,7 +121,7 @@ mpiTest(picpart 4 ./ex12
 
 mpiTest(picpart 24 ./ex12
   -mesh picpart
-  -picpart_path ${CMAKE_SOURCE_DIR}/xgc-picparts/24k/24p/picpart
+  -picpart_path ${CMAKE_SOURCE_DIR}/xgc-picparts/24k/24p/24k_bfs_bfs_24.ppm/24k_bfs_bfs_
   -vec_view vtk:24k_pic24_sol.vtu:vtk_vtu
   -snes_view
   -dm_view vtk:24k_pic24_dm.vtu:vtk_vtu
