@@ -790,7 +790,7 @@ void getPtnMeshElmToVtxArray(Omega_h::Mesh &mesh, std::vector<int>& global_cell)
   }
 }
 
-std::unordered_set<int> MarkBoundaryVerts(Omega_h::filesystem::path file_path)
+std::unordered_set<int> GetBoundaryVerts(Omega_h::filesystem::path file_path)
 {
   auto lib = Omega_h::Library();
   Omega_h::Mesh mesh(&lib);
@@ -829,6 +829,46 @@ std::unordered_set<int> MarkBoundaryVerts(Omega_h::filesystem::path file_path)
   }
 
   return boundary_verts;
+}
+
+PetscErrorCode MarkBoundaryVerts(DM *dm, const std::unordered_set<int> &boundary_verts, Omega_h::Mesh mesh, const int rank) 
+{
+  PetscErrorCode ierr;
+  
+  PetscInt vStart, vEnd;
+  ierr = DMPlexGetHeightStratum(*dm, 1, &vStart, &vEnd); /* vertices */ 
+
+  DMLabel label;
+  ierr = DMCreateLabel(*dm, "marker");CHKERRQ(ierr);
+  ierr = DMGetLabel(*dm, "marker", &label);CHKERRQ(ierr);
+
+  Omega_h::Read<Omega_h::GO> global_vertex_id = mesh.get_array<Omega_h::GO>(0, "global_serial");
+  Omega_h::Read<Omega_h::LO> vertex_ownership = mesh.get_array<Omega_h::LO>(0, "ownership");
+
+  // Get the core of the picpart owned by the current rank
+  std::vector<int> core_vertex;
+  for (int i = 0; i < global_vertex_id.size(); i++)
+  {
+    if (vertex_ownership[i] == rank)
+    {
+      core_vertex.push_back(global_vertex_id[i]);
+    }
+  }
+
+  // Mark the boundary vertices in DMPlex using global vertex ids
+  for (auto itr = boundary_verts.begin(); itr != boundary_verts.end(); itr++)
+  {
+    auto picpart_itr = std::find(core_vertex.begin(), core_vertex.end(), *itr);
+    if (picpart_itr != core_vertex.end())
+    {
+      // Convert to local index of the picpart
+      int index = picpart_itr-core_vertex.begin();
+
+      ierr = DMSetLabelValue(*dm, "marker", index+vStart, 1);CHKERRQ(ierr);
+    }
+  } 
+
+  PetscFunctionReturn(0);
 }
 
 static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
@@ -918,6 +958,11 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
         localVertex, PETSC_OWN_POINTER, remoteVertex, PETSC_OWN_POINTER);CHKERRQ(ierr);
     ierr = DMSetFromOptions(*dm);CHKERRQ(ierr); //perform mesh checks
     ierr = DMViewFromOptions(*dm, NULL, "-dm_view");CHKERRQ(ierr);
+
+    Omega_h::filesystem::path file_path = "../omegahPetsc/24k.osh";
+    std::unordered_set<int> boundary_verts = GetBoundaryVerts(file_path);
+    ierr = MarkBoundaryVerts(dm, boundary_verts, mesh, rank);
+
     if(false) {
       PetscSFView(pointSF, PETSC_VIEWER_STDOUT_WORLD);
     }
@@ -1020,40 +1065,6 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
       MPI_Barrier(comm);
     }
   }
-
-  DMLabel label;
-  ierr = DMCreateLabel(*dm, "marker");CHKERRQ(ierr);
-  ierr = DMGetLabel(*dm, "marker", &label);CHKERRQ(ierr);
-
-  Omega_h::filesystem::path file_path = "../omegahPetsc/24k.osh";
-  std::unordered_set<int> boundary_verts = MarkBoundaryVerts(file_path);
-  Omega_h::Read<Omega_h::GO> global_vertex_id = mesh.get_array<Omega_h::GO>(0, "global_serial");
-  Omega_h::Read<Omega_h::LO> vertex_ownership = mesh.get_array<Omega_h::LO>(0, "ownership");
-
-  // Get the core of the picpart owned by the current rank
-  std::vector<int> core_vertex;
-  for (int i = 0; i < global_vertex_id.size(); i++)
-  {
-    if (vertex_ownership[i] == rank)
-    {
-      core_vertex.push_back(global_vertex_id[i]);
-    }
-  }
-  
-  // Mark the boundary vertices and edges in DMPlex using global vertex ids
-  for (auto itr = boundary_verts.begin(); itr != boundary_verts.end(); itr++)
-  {
-    auto picpart_itr = std::find(core_vertex.begin(), core_vertex.end(), *itr);
-    if (picpart_itr != core_vertex.end())
-    {
-      // Convert to local index of the picpart
-      int index = picpart_itr-core_vertex.begin();
-
-      ierr = DMSetLabelValue(*dm, "marker", index+vStart, 1);CHKERRQ(ierr);
-    }
-  } 
-  
-  ierr = DMPlexLabelComplete(*dm, label);CHKERRQ(ierr);
 
   PetscFunctionReturn(0);
 }

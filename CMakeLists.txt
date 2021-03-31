@@ -121,7 +121,7 @@ mpiTest(picpart 4 ./ex12
 
 mpiTest(picpart 24 ./ex12
   -mesh picpart
-  -picpart_path ${CMAKE_SOURCE_DIR}/xgc-picparts/24k/24p/24k_bfs_bfs_24.ppm/24k_bfs_bfs_
+  -picpart_path ${CMAKE_SOURCE_DIR}/xgc-picparts/24k/24k_bfs_bfs_24.ppm/24k_bfs_bfs_
   -vec_view vtk:24k_pic24_sol.vtu:vtk_vtu
   -snes_view
   -dm_view vtk:24k_pic24_dm.vtu:vtk_vtu
