@@ -36,7 +36,6 @@ target_compile_options(ex12 PRIVATE
 
 set(petscArgs
   -run_type full
-  -petscpartitioner_type parmetis
   -dm_refine 0
   -bc_type dirichlet
   -interpolate 1
@@ -45,7 +44,7 @@ set(petscArgs
   -ksp_gmres_restart 100
   -ksp_rtol 1.0e-9
   -dm_mat_type is
-  -pc_type bddc
+  -pc_type jacobi
   -snes_monitor_short
   -ksp_monitor_short
   -snes_converged_reason
@@ -65,12 +64,12 @@ function(mpiTest TESTNAME PROCS EXE)
 endfunction(mpiTest)
 
 mpiTest(24kxgc 4 ./ex12
-    -mesh ${CMAKE_SOURCE_DIR}/xgc-picparts/24k/4p/picpart
+    -mesh ${CMAKE_SOURCE_DIR}/xgc-picparts/24k/24k_full_bfs_4.ppm/24k_full_bfs_
     -vec_view vtk:24k_pic4_sol.vtu:vtk_vtu
     ${petscArgs})
 
 mpiTest(24kxgc 24 ./ex12
-    -mesh ${CMAKE_SOURCE_DIR}/xgc-picparts/24k/24p/picpart
+    -mesh ${CMAKE_SOURCE_DIR}/xgc-picparts/24k/24k_bfs_bfs_24.ppm/24k_bfs_bfs_
     -vec_view vtk:24k_pic24_sol.vtu:vtk_vtu
     ${petscArgs})
     
