@@ -581,11 +581,11 @@ std::unordered_set<int> GetBoundaryVerts(Omega_h::filesystem::path file_path)
 
   const auto dim = mesh.dim();
 
-  Omega_h::Read<Omega_h::LO> edges_verts = mesh.get_adj(1, 0).ab2b;
-  Omega_h::Read<Omega_h::LO> elem_edges = mesh.get_adj(dim, 1).ab2b;
+  Omega_h::HostRead<Omega_h::LO> edges_verts = mesh.get_adj(1, 0).ab2b;
+  Omega_h::HostRead<Omega_h::LO> elem_edges = mesh.get_adj(dim, 1).ab2b;
   
   // Sort the element to edge adjacency to reveal which edge has 1 face
-  std::vector<int> sorted_elem_edges(elem_edges.begin(), elem_edges.end());
+  std::vector<int> sorted_elem_edges(elem_edges.data(), elem_edges.data()+elem_edges.size());
   std::sort(sorted_elem_edges.begin(), sorted_elem_edges.end());
   std::vector<int> boundary_edge;
   for (unsigned int i = 0; i < sorted_elem_edges.size()-1; i++)
@@ -615,10 +615,12 @@ std::unordered_set<int> GetBoundaryVerts(Omega_h::filesystem::path file_path)
 }
 
 PetscErrorCode MarkBoundaryVerts(DM *dm, const std::unordered_set<int> &boundary_verts, 
-                                  const Omega_h::Read<Omega_h::GO> &global_vertex_id, 
+                                  const Omega_h::HostRead<Omega_h::GO> &global_vertex, 
                                   const int rank, const int vStart) 
 {
   PetscErrorCode ierr;
+
+  std::vector<int> global_vertex_id(global_vertex.data(), global_vertex.data()+global_vertex.size());
 
   DMLabel label;
   ierr = DMCreateLabel(*dm, "marker");CHKERRQ(ierr);
@@ -675,7 +677,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   MPI_Comm_rank(MST_comm, &MST_rank);
   MPI_Comm_size(MST_comm, &MST_commSize);
   PETSC_COMM_WORLD = MST_comm; 
-
+  
   Omega_h::filesystem::path entire_mesh = "../omegahPetsc/24k.osh";
   std::unordered_set<int> boundary_verts = GetBoundaryVerts(entire_mesh);
 
@@ -689,7 +691,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
 
     // Change the local to global vertex id for adjacency
     std::vector<int> core_cell(cell.size());
-    Omega_h::Read<Omega_h::GO> global_vertex = mesh.get_array<Omega_h::GO>(0, "global_serial");
+    Omega_h::HostRead<Omega_h::GO> global_vertex = mesh.get_array<Omega_h::GO>(0, "global_serial");
 
     Omega_h::Read<Omega_h::Real> vertexCoords = mesh.coords();
 
