@@ -24,11 +24,11 @@ Information on refinement:
 #include <Omega_h_mesh.hpp>
 #include <Omega_h_comm.hpp>
 #include <Omega_h_build.hpp>
+#include <Omega_h_filesystem.hpp>
 #include <algorithm>
 #include <vector>
-#include <set>
+#include <unordered_set>
 #include <iostream>
-#include <Omega_h_filesystem.hpp>
 
 
 typedef enum {NEUMANN, DIRICHLET, NONE} BCType;
@@ -573,6 +573,75 @@ static void getModelFacePartition(MPI_Comm comm, const int &commSize, std::vecto
   delete[] max_class_id_array;
 }
 
+std::unordered_set<int> GetBoundaryVerts(Omega_h::filesystem::path file_path)
+{
+  auto lib = Omega_h::Library();
+  Omega_h::Mesh mesh(&lib);
+  Omega_h::binary::read(file_path, lib.self(), &mesh);
+
+  const auto dim = mesh.dim();
+
+  Omega_h::Read<Omega_h::LO> edges_verts = mesh.get_adj(1, 0).ab2b;
+  Omega_h::Read<Omega_h::LO> elem_edges = mesh.get_adj(dim, 1).ab2b;
+  
+  // Sort the element to edge adjacency to reveal which edge has 1 face
+  std::vector<int> sorted_elem_edges(elem_edges.begin(), elem_edges.end());
+  std::sort(sorted_elem_edges.begin(), sorted_elem_edges.end());
+  std::vector<int> boundary_edge;
+  for (unsigned int i = 0; i < sorted_elem_edges.size()-1; i++)
+  {
+    if (sorted_elem_edges[i] != sorted_elem_edges[i+1])
+    {
+      boundary_edge.push_back(sorted_elem_edges[i]);
+    }
+    else
+    {
+      i++;
+    }
+  }
+
+  std::unordered_set<int> boundary_verts;
+  // Get the boundary vertices from the boundary edges
+  for (unsigned int i = 0; i < boundary_edge.size(); i++)
+  {
+    int vert1 = edges_verts[2*boundary_edge[i]];
+    int vert2 = edges_verts[2*boundary_edge[i]+1];
+    
+    boundary_verts.insert(vert1);
+    boundary_verts.insert(vert2);
+  }
+
+  return boundary_verts;
+}
+
+PetscErrorCode MarkBoundaryVerts(DM *dm, const std::unordered_set<int> &boundary_verts, 
+                                  const Omega_h::Read<Omega_h::GO> &global_vertex_id, 
+                                  const int rank, const int vStart) 
+{
+  PetscErrorCode ierr;
+
+  DMLabel label;
+  ierr = DMCreateLabel(*dm, "marker");CHKERRQ(ierr);
+  ierr = DMGetLabel(*dm, "marker", &label);CHKERRQ(ierr);
+  
+  // Mark the boundary vertices in DMPlex using global vertex ids
+  for (auto itr = boundary_verts.begin(); itr != boundary_verts.end(); itr++)
+  {
+    auto picpart_itr = std::find(global_vertex_id.begin(), global_vertex_id.end(), *itr);
+    if (picpart_itr != global_vertex_id.end())
+    {
+      // Convert to local index of the picpart
+      int index = picpart_itr-global_vertex_id.begin();
+
+      ierr = DMSetLabelValue(*dm, "marker", index+vStart, 1);CHKERRQ(ierr);
+    }
+  } 
+
+  ierr = DMPlexLabelComplete(*dm, label);CHKERRQ(ierr);
+
+  PetscFunctionReturn(0);
+}
+
 static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
 {
   assert(options->dim == 2);
@@ -607,6 +676,9 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   MPI_Comm_size(MST_comm, &MST_commSize);
   PETSC_COMM_WORLD = MST_comm; 
 
+  Omega_h::filesystem::path entire_mesh = "../omegahPetsc/24k.osh";
+  std::unordered_set<int> boundary_verts = GetBoundaryVerts(entire_mesh);
+
   if (MST_comm != MPI_COMM_NULL)
   {
     Omega_h::HostRead<Omega_h::LO> ownership_elem = mesh.get_array<Omega_h::LO>(mesh.dim(), "ownership");
@@ -617,7 +689,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
 
     // Change the local to global vertex id for adjacency
     std::vector<int> core_cell(cell.size());
-    Omega_h::HostRead<long> global_vertex = mesh.get_array<long>(0, "gids");
+    Omega_h::Read<Omega_h::GO> global_vertex = mesh.get_array<Omega_h::GO>(0, "global_serial");
 
     Omega_h::Read<Omega_h::Real> vertexCoords = mesh.coords();
 
@@ -753,49 +825,8 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
     ierr = DMPlexGetHeightStratum(*dm, 0, &cStart, &cEnd); /* cells */ 
     ierr = DMPlexGetHeightStratum(*dm, 1, &eStart, &eEnd); /* edges */ 
     ierr = DMPlexGetHeightStratum(*dm, 2, &vStart, &vEnd); /* vertices */
-
-    int dm_total_cell = 0;
-    int oh_total_cell = 0;
-    int dm_cell = cEnd-cStart;
-    MPI_Allreduce(&dm_cell, &dm_total_cell, 1, MPI_INT, MPI_SUM, MST_comm);
-    MPI_Allreduce(&numCells, &oh_total_cell, 1, MPI_INT, MPI_SUM, MST_comm);
-    fprintf(stderr, "dm_rank: %d, dm_cell: %d\n", MST_rank, dm_cell);
-    if (MST_rank == 0)
-    {
-      fprintf(stderr, "dm_total_cell: %d, oh_total_cell: %d\n", dm_total_cell, oh_total_cell);
-    }
-    assert(dm_total_cell == oh_total_cell);
     
-
-    /* 
-    Iterate through all the edges and then check if each edge is shared by two different cells by 
-    using DMPlexGetSupportSize. It is a boundary edge if the edge exist in only one cell. 
-    */
-    std::vector<int> boundary_edge;
-    for (int i = eStart; i < eEnd; i++)
-    {
-      int support_size;
-      ierr = DMPlexGetSupportSize(*dm, i, &support_size);CHKERRQ(ierr);
-
-      if (support_size == 1)
-      {
-        boundary_edge.push_back(i);
-      }
-      
-    }
-    
-    // By using a set, the vertices for all the boundary edges would not repeat
-    // Can be replaced with an unordered_set
-    std::set<int> boundary_vert;
-    for (unsigned int i = 0; i < boundary_edge.size(); i++)
-    {
-      // Get the two vertices for a boundary edge
-      const int *verts;
-      ierr = DMPlexGetCone(*dm, boundary_edge[i], &verts);CHKERRQ(ierr);
-
-      boundary_vert.insert(verts[0]);
-      boundary_vert.insert(verts[1]);
-    }
+    ierr = MarkBoundaryVerts(dm, boundary_verts, global_vertex, rank, vStart);
 
     // Output an uninterpolated mesh if needed
     if (options->interpolate == PETSC_FALSE)
@@ -805,19 +836,6 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
       ierr = DMPlexCopyCoordinates(*dm, dm_unint);CHKERRQ(ierr);
       ierr = DMDestroy(dm);CHKERRQ(ierr);
       *dm = dm_unint;
-    }
-
-    // Mark the boundary vertices and edges in DMPlex
-    for (auto i = boundary_vert.begin(); i != boundary_vert.end(); i++)
-    {
-      ierr = DMSetLabelValue(*dm, "marker", *i, 1);CHKERRQ(ierr);
-    }
-    if (options->interpolate == PETSC_TRUE) 
-    {
-      for (unsigned int i = 0; i < boundary_edge.size(); i++)
-      {
-        ierr = DMSetLabelValue(*dm, "marker", boundary_edge[i], 1);CHKERRQ(ierr);
-      }
     }
   }
   PetscFunctionReturn(0);
