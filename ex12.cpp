@@ -700,7 +700,7 @@ void getPicPartCoreVtxOwnerIdx(Omega_h::Mesh &mesh, const int rank,
   const int numCoreGhostVerts = numCoreVerts - numCoreOwnedVerts;
   assert(numCoreGhostVerts >=0);
   const auto vtxOwner_d = mesh.get_array<Omega_h::LO>(0, "ownership");
-  const auto vtxGids_d = mesh.get_array<Omega_h::GO>(0, "gids");
+  const auto vtxGids_d = mesh.get_array<Omega_h::GO>(0, "global_serial");
   Omega_h::Write<Omega_h::LO> ghostVtx2coreVtx_d(numCoreGhostVerts);
   Omega_h::Write<Omega_h::GO> ghostVtxGid_d(numCoreGhostVerts);
   Omega_h::Write<Omega_h::I32> ghostVtxOwner_d(numCoreGhostVerts);
@@ -798,11 +798,11 @@ std::unordered_set<int> GetBoundaryVerts(Omega_h::filesystem::path file_path)
 
   const auto dim = mesh.dim();
 
-  Omega_h::Read<Omega_h::LO> edges_verts = mesh.get_adj(1, 0).ab2b;
-  Omega_h::Read<Omega_h::LO> elem_edges = mesh.get_adj(dim, 1).ab2b;
+  Omega_h::HostRead<Omega_h::LO> edges_verts = mesh.get_adj(1, 0).ab2b;
+  Omega_h::HostRead<Omega_h::LO> elem_edges = mesh.get_adj(dim, 1).ab2b;
   
   // Sort the element to edge adjacency to reveal which edge has 1 face
-  std::vector<int> sorted_elem_edges(elem_edges.begin(), elem_edges.end());
+  std::vector<int> sorted_elem_edges(elem_edges.data(), elem_edges.data()+elem_edges.size());
   std::sort(sorted_elem_edges.begin(), sorted_elem_edges.end());
   std::vector<int> boundary_edge;
   for (unsigned int i = 0; i < sorted_elem_edges.size()-1; i++)
@@ -831,25 +831,22 @@ std::unordered_set<int> GetBoundaryVerts(Omega_h::filesystem::path file_path)
   return boundary_verts;
 }
 
-PetscErrorCode MarkBoundaryVerts(DM *dm, const std::unordered_set<int> &boundary_verts, Omega_h::Mesh mesh, const int rank) 
+PetscErrorCode MarkBoundaryVerts(DM *dm, const std::unordered_set<int> &boundary_verts, \
+                                  Omega_h::LOs partvtx2corevtx, Omega_h::Mesh mesh, const int vStart) 
 {
   PetscErrorCode ierr;
-  
-  PetscInt vStart, vEnd;
-  ierr = DMPlexGetHeightStratum(*dm, 1, &vStart, &vEnd); /* vertices */ 
 
   DMLabel label;
   ierr = DMCreateLabel(*dm, "marker");CHKERRQ(ierr);
   ierr = DMGetLabel(*dm, "marker", &label);CHKERRQ(ierr);
 
-  Omega_h::Read<Omega_h::GO> global_vertex_id = mesh.get_array<Omega_h::GO>(0, "global_serial");
-  Omega_h::Read<Omega_h::LO> vertex_ownership = mesh.get_array<Omega_h::LO>(0, "ownership");
+  Omega_h::HostRead<Omega_h::GO> global_vertex_id = mesh.get_array<Omega_h::GO>(0, "global_serial");
 
   // Get the core of the picpart owned by the current rank
   std::vector<int> core_vertex;
-  for (int i = 0; i < global_vertex_id.size(); i++)
+  for (int i = 0; i < partvtx2corevtx.size(); i++)
   {
-    if (vertex_ownership[i] == rank)
+    if (partvtx2corevtx.get(i) >= 0)
     {
       core_vertex.push_back(global_vertex_id[i]);
     }
@@ -909,12 +906,12 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   int numGlobalVerts; //TODO 'ptscNumGlobVerts'
   int numCells; //TODO 'ptscNumCells'
   Omega_h::HostRead<Omega_h::Real> vertexCoords; //TODO 'ptscVtxCoords'
+  Omega_h::LOs partvtx2corevtx_rd;
   if (strcmp(options->mesh_type, "picpart") == 0)
   {
     //PETSC_NEEDS_1 - 'vertexCoords'
     int numCoreVerts;
     int numOwnedCoreVerts;
-    Omega_h::LOs partvtx2corevtx_rd;
     getPicPartCoreVtxCoords(mesh, rank, numCoreVerts, numOwnedCoreVerts, vertexCoords, partvtx2corevtx_rd);
     int numCoreElms;
     Omega_h::HostRead<Omega_h::LO> cells2verts;
@@ -958,10 +955,6 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
         localVertex, PETSC_OWN_POINTER, remoteVertex, PETSC_OWN_POINTER);CHKERRQ(ierr);
     ierr = DMSetFromOptions(*dm);CHKERRQ(ierr); //perform mesh checks
     ierr = DMViewFromOptions(*dm, NULL, "-dm_view");CHKERRQ(ierr);
-
-    Omega_h::filesystem::path file_path = "../omegahPetsc/24k.osh";
-    std::unordered_set<int> boundary_verts = GetBoundaryVerts(file_path);
-    ierr = MarkBoundaryVerts(dm, boundary_verts, mesh, rank);
 
     if(false) {
       PetscSFView(pointSF, PETSC_VIEWER_STDOUT_WORLD);
@@ -1053,6 +1046,10 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   ierr = DMPlexGetHeightStratum(*dm, 0, &cStart, &cEnd); /* cells */ 
   ierr = DMPlexGetHeightStratum(*dm, 1, &eStart, &eEnd); /* edges */ 
   ierr = DMPlexGetHeightStratum(*dm, 2, &vStart, &vEnd); /* vertices */
+
+  Omega_h::filesystem::path file_path = "../omegahPetsc/24k.osh";
+  std::unordered_set<int> boundary_verts = GetBoundaryVerts(file_path);
+  ierr = MarkBoundaryVerts(dm, boundary_verts, partvtx2corevtx_rd, mesh, vStart);
 
   if(debug) {
     for (int i = 0; i < commSize; i++) {
