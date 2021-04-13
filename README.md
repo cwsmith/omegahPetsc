@@ -432,7 +432,7 @@ build
 #source the petsc environment script if not done so already
 mkdir $root/build-omegahCudaOn-rhel7
 cd $_
-cmake $1 \
+cmake $root/omega_h \
 -DCMAKE_INSTALL_PREFIX=$PWD/install \
 -DOmega_h_USE_MPI=on \
 -DOmega_h_USE_CUDA=on \
