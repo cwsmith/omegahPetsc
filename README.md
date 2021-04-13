@@ -412,6 +412,7 @@ if __name__ == '__main__':
 build
 
 ```
+chmod +x arch-rhel7-cuda.py
 source envCuda.sh
 ./arch-rhel7-cuda.py
 #follow the instructions in the petsc configure output to run make
