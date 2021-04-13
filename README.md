@@ -458,7 +458,7 @@ module use /opt/scorec/spack/v0132/lmod/linux-rhel7-x86_64/Core
 module load gcc mpich cmake cuda/10.2
 export MPICH_CXX=g++
 
-oh=$root/build-omegah-cuda
+oh=$root/build-omegahCudaOn-rhel7
 export CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH:$oh/install/lib/cmake
 petscArch=arch-rhel7-cuda
 export PKG_CONFIG_PATH=$PKG_CONFIG_PATH:$root/petsc/${petscArch}/lib/pkgconfig
