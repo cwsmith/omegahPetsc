@@ -413,7 +413,7 @@ build
 
 ```
 source envCuda.sh
-./arch-rhe7-cuda.py
+./arch-rhel7-cuda.py
 #follow the instructions in the petsc configure output to run make
 ```
 
