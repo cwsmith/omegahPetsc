@@ -9,18 +9,25 @@ pkg_check_modules(PETSC REQUIRED IMPORTED_TARGET PETSc>3.7.0)
 
 #hack to remove '-Werror' flag - petsc ex12 has many unused function variables
 get_property(ohFlags TARGET Omega_h::omega_h PROPERTY INTERFACE_COMPILE_OPTIONS)
-list(GET ohFlags 0 ohFlags0)
-string(REPLACE "-Werror," "" ohFlags0Mod ${ohFlags0})
-list(GET ohFlags 1 ohFlags1)
-list(APPEND ohFlags0Mod ${ohFlags1})
+set(ohFlagsMod)
+foreach(flags IN LISTS ohFlags)
+  string(REPLACE "-Werror," "" flagsMod ${flags})
+  list(APPEND ohFlagsMod ${flagsMod})
+endforeach()
+if(Omega_h_USE_CUDA)
+  #hack: the omeagah install using kokkos does not pass this flag
+  list(APPEND ohFlagsMod "--extended-lambda")
+endif()
 set_property(TARGET Omega_h::omega_h PROPERTY
-  INTERFACE_COMPILE_OPTIONS "${ohFlags0Mod}")
+  INTERFACE_COMPILE_OPTIONS "${ohFlagsMod}")
 
 option(OMEGAH_PETSC_USE_CUDA OFF)
 if(OMEGAH_PETSC_USE_CUDA AND NOT Omega_h_USE_CUDA)
   message(FATAL_ERROR "OMEGAH_PETSC_USE_CUDA cannot be enabled with a build of"
                       "Omega_h with CUDA disabled 'Omega_h_USE_CUDA=${Omega_h_USE_CUDA}'")
 endif()
+
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_executable(ex12 ex12.cpp)
 if(OMEGAH_PETSC_USE_CUDA)
