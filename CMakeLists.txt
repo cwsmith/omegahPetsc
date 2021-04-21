@@ -37,19 +37,6 @@ target_compile_options(ex12 PRIVATE
   $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
   ${HOST_FLAG_PREFIX} -Wno-unused-parameter>)
 
-add_executable(markMdlBdry markMdlBdry.cpp)
-if(OMEGAH_PETSC_USE_CUDA)
-  enable_language(CUDA)
-  set_source_files_properties(markMdlBdry.cpp PROPERTIES LANGUAGE CUDA)
-  set(HOST_FLAG_PREFIX "-Xcompiler")
-endif()
-target_link_libraries(markMdlBdry Omega_h::omega_h)
-
-target_compile_options(markMdlBdry PRIVATE
-  $<$<OR:$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>,$<CXX_COMPILER_ID:GNU>>:
-  ${HOST_FLAG_PREFIX} -Wno-unused-parameter>)
-
-
 set(petscArgs
   -run_type full
   -petscpartitioner_type parmetis
