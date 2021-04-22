@@ -338,6 +338,145 @@ cmake ../omegahPetsc/ -DCMAKE_CXX_COMPILER=mpicxx
 make
 ```
 
+# Build on SCOREC RHEL7 with cuda
+
+The instructions download and install packages into the
+`~/develop/omegahPetscCuda` directory.  The variable `root`
+is set to this path.  Ensure that this is set before running
+any of the instructions below.
+
+```
+export root=~/develop/omegahPetscCuda
+```
+
+## one time setup
+
+```
+mkdir -p $root
+```
+
+## petsc
+
+```
+cd $root
+git clone https://gitlab.com/petsc/petsc.git
+cd petsc
+# some PETSc APIs appear to have changed in main@4982446
+git checkout 7a013d0
+```
+
+environment script `$root/petsc/envCuda.sh`
+
+```
+module use /opt/scorec/spack/v0132/lmod/linux-rhel7-x86_64/Core
+module load gcc mpich 
+module load \
+  cmake \
+  hdf5 \
+  parmetis/4.0.3-int32-uuza7iv \
+  hypre/2.18.1-int32-y2p4vsy \
+  cuda/10.2
+
+export MPICH_CXX=g++
+export MPICH_CC=gcc
+export MPICH_FC=gfortran
+```
+
+configure script `$root/petsc/arch-rhel7-cuda.py`
+
+```
+#!/usr/bin/python
+if __name__ == '__main__':
+  import os
+  import sys
+  sys.path.insert(0, os.path.abspath('config'))
+  import configure
+  configure_options = [
+    '--with-cc=mpicc',
+    '--with-cxx=mpicxx',
+    '--with-fc=mpif90',
+    '--with-shared-libraries=1',
+    '--with-debugging=yes',
+    '--COPTFLAGS=-g -O2 -fPIC',
+    '--CXXOPTFLAGS=-g -O2 -fPIC',
+    '--FOPTFLAGS=-g -O2 -fPIC',
+    '--with-parmetis-dir=' + os.environ['PARMETIS_ROOT'],
+    '--with-metis-dir=' + os.environ['METIS_ROOT'],
+    '--with-make-np=8',
+    '--with-cuda=1',
+    '--with-cudac=nvcc',
+  ] 
+  configure.petsc_configure(configure_options)
+```
+
+build
+
+```
+chmod +x arch-rhel7-cuda.py
+source envCuda.sh
+./arch-rhel7-cuda.py
+#follow the instructions in the petsc configure output to run make
+```
+
+## omegah
+
+```
+cd $root
+git clone https://github.com/SCOREC/omega_h.git
+```
+
+
+build
+
+```
+#source the petsc environment script if not done so already
+mkdir $root/build-omegahCudaOn-rhel7
+cd $_
+cmake $root/omega_h \
+-DCMAKE_INSTALL_PREFIX=$PWD/install \
+-DOmega_h_USE_MPI=on \
+-DOmega_h_USE_CUDA=on \
+-DCMAKE_CUDA_HOST_COMPILER=g++ \
+-DCMAKE_CUDA_FLAGS="-arch=sm_75" \
+-DMPI_CXX_COMPILER=`which mpicxx` \
+-DBUILD_TESTING=ON
+
+make install -j16
+```
+
+## omegahPetsc
+
+```
+cd $root
+git clone https://github.com/cwsmith/omegahPetsc.git
+```
+
+environment script `$root/omegahPetsc/envRhel7v0132_omegahPetsc_cuda.sh`
+
+```
+module use /opt/scorec/spack/v0132/lmod/linux-rhel7-x86_64/Core
+module load gcc mpich cmake cuda/10.2
+export MPICH_CXX=g++
+
+oh=$root/build-omegahCudaOn-rhel7
+export CMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH:$oh/install/lib/cmake
+petscArch=arch-rhel7-cuda
+export PKG_CONFIG_PATH=$PKG_CONFIG_PATH:$root/petsc/${petscArch}/lib/pkgconfig
+```
+
+build
+
+```
+source $root/omegahPetsc/envRhel7v0132_omegahPetsc_cuda.sh
+mkdir $root/build-omegahPetsc-cudaOn
+cd $_
+cmake ../omegahPetsc/ \
+ -DOMEGAH_PETSC_USE_CUDA=ON \
+ -DCMAKE_CUDA_HOST_COMPILER=mpicxx \
+ -DCMAKE_CUDA_ARCHITECTURES="75"
+make
+```
+
 # Build on SCOREC RHEL7 with cuda disabled
 
 ## petsc
@@ -380,9 +519,9 @@ if __name__ == '__main__':
     '--with-fc=mpif90',
     '--with-shared-libraries=1',
     '--with-debugging=yes',
-    '--COPTFLAGS=-g -O2 -mcpu=power9 -fPIC',
-    '--CXXOPTFLAGS=-g -O2 -mcpu=power9 -fPIC',
-    '--FOPTFLAGS=-g -O2 -mcpu=power9 -fPIC',
+    '--COPTFLAGS=-g -O2 -fPIC',
+    '--CXXOPTFLAGS=-g -O2 -fPIC',
+    '--FOPTFLAGS=-g -O2 -fPIC',
     '--with-parmetis-dir=' + os.environ['PARMETIS_ROOT'],
     '--with-metis-dir=' + os.environ['METIS_ROOT'],
     '--with-make-np=8',
