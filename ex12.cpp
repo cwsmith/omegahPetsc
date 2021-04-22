@@ -30,9 +30,9 @@ Information on refinement:
 #include <Omega_h_int_scan.hpp>
 #include <Omega_h_array_ops.hpp>
 #include <Omega_h_print.hpp>
+#include <Omega_h_filesystem.hpp>
 #include <algorithm>
 #include <vector>
-#include <set>
 #include <iostream>
 #include <unordered_set>
 
@@ -71,6 +71,7 @@ typedef struct {
 
   char           mesh_type[512] = "box";
   char           picpart_path[512] = "picpart.osh";
+  char           serial_mesh_path[1024] = "serialMesh.osh";
 } AppCtx;
 
 static PetscErrorCode zero(PetscInt dim, PetscReal time, const PetscReal x[], PetscInt Nc, PetscScalar *u, void *ctx)
@@ -507,6 +508,7 @@ static PetscErrorCode ProcessOptions(MPI_Comm comm, AppCtx *options)
   }
   ierr = PetscOptionsString("-mesh", "Use box or xgc mesh", "ex12.c", options->mesh_type, options->mesh_type, sizeof(options->mesh_type), &flg);CHKERRQ(ierr);
   ierr = PetscOptionsString("-picpart_path", "Specify picpart file path", "ex12.c", options->picpart_path, options->picpart_path, sizeof(options->picpart_path), &flg);CHKERRQ(ierr);
+  ierr = PetscOptionsString("-serial_mesh_path", "Specify serial mesh file path", "ex12.c", options->serial_mesh_path, options->serial_mesh_path, sizeof(options->serial_mesh_path), &flg);CHKERRQ(ierr);
   ierr = PetscOptionsEnd();
   ierr = PetscLogEventRegister("CreateMesh", DM_CLASSID, &options->createMeshEvent);CHKERRQ(ierr);
   PetscFunctionReturn(0);
@@ -700,7 +702,7 @@ void getPicPartCoreVtxOwnerIdx(Omega_h::Mesh &mesh, const int rank,
   const int numCoreGhostVerts = numCoreVerts - numCoreOwnedVerts;
   assert(numCoreGhostVerts >=0);
   const auto vtxOwner_d = mesh.get_array<Omega_h::LO>(0, "ownership");
-  const auto vtxGids_d = mesh.get_array<Omega_h::GO>(0, "gids");
+  const auto vtxGids_d = mesh.get_array<Omega_h::GO>(0, "global_serial");
   Omega_h::Write<Omega_h::LO> ghostVtx2coreVtx_d(numCoreGhostVerts);
   Omega_h::Write<Omega_h::GO> ghostVtxGid_d(numCoreGhostVerts);
   Omega_h::Write<Omega_h::I32> ghostVtxOwner_d(numCoreGhostVerts);
@@ -790,6 +792,84 @@ void getPtnMeshElmToVtxArray(Omega_h::Mesh &mesh, std::vector<int>& global_cell)
   }
 }
 
+std::unordered_set<int> GetBoundaryVerts(Omega_h::filesystem::path file_path)
+{
+  auto lib = Omega_h::Library();
+  Omega_h::Mesh mesh(&lib);
+  Omega_h::binary::read(file_path, lib.self(), &mesh);
+
+  const auto dim = mesh.dim();
+
+  Omega_h::HostRead<Omega_h::LO> edges_verts = mesh.get_adj(1, 0).ab2b;
+  Omega_h::HostRead<Omega_h::LO> elem_edges = mesh.get_adj(dim, 1).ab2b;
+  
+  // Sort the element to edge adjacency to reveal which edge has 1 face
+  std::vector<int> sorted_elem_edges(elem_edges.data(), elem_edges.data()+elem_edges.size());
+  std::sort(sorted_elem_edges.begin(), sorted_elem_edges.end());
+  std::vector<int> boundary_edge;
+  for (unsigned int i = 0; i < sorted_elem_edges.size()-1; i++)
+  {
+    if (sorted_elem_edges[i] != sorted_elem_edges[i+1])
+    {
+      boundary_edge.push_back(sorted_elem_edges[i]);
+    }
+    else
+    {
+      i++;
+    }
+  }
+
+  std::unordered_set<int> boundary_verts;
+  // Get the boundary vertices from the boundary edges
+  for (unsigned int i = 0; i < boundary_edge.size(); i++)
+  {
+    int vert1 = edges_verts[2*boundary_edge[i]];
+    int vert2 = edges_verts[2*boundary_edge[i]+1];
+    
+    boundary_verts.insert(vert1);
+    boundary_verts.insert(vert2);
+  }
+
+  return boundary_verts;
+}
+
+PetscErrorCode MarkBoundaryVerts(DM *dm, const std::unordered_set<int> &boundary_verts, \
+                                  Omega_h::LOs partvtx2corevtx, Omega_h::Mesh mesh, const int vStart) 
+{
+  PetscErrorCode ierr;
+
+  DMLabel label;
+  ierr = DMCreateLabel(*dm, "marker");CHKERRQ(ierr);
+  ierr = DMGetLabel(*dm, "marker", &label);CHKERRQ(ierr);
+
+  Omega_h::HostRead<Omega_h::GO> global_vertex_id = mesh.get_array<Omega_h::GO>(0, "global_serial");
+
+  // Get the core of the picpart owned by the current rank
+  std::vector<int> core_vertex;
+  for (int i = 0; i < partvtx2corevtx.size(); i++)
+  {
+    if (partvtx2corevtx.get(i) >= 0)
+    {
+      core_vertex.push_back(global_vertex_id[i]);
+    }
+  }
+
+  // Mark the boundary vertices in DMPlex using global vertex ids
+  for (auto itr = boundary_verts.begin(); itr != boundary_verts.end(); itr++)
+  {
+    auto picpart_itr = std::find(core_vertex.begin(), core_vertex.end(), *itr);
+    if (picpart_itr != core_vertex.end())
+    {
+      // Convert to local index of the picpart
+      int index = picpart_itr-core_vertex.begin();
+
+      ierr = DMSetLabelValue(*dm, "marker", index+vStart, 1);CHKERRQ(ierr);
+    }
+  } 
+
+  PetscFunctionReturn(0);
+}
+
 static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options, Omega_h::Library lib)
 {
   assert(options->dim == 2);
@@ -827,12 +907,12 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options, Ome
   int numGlobalVerts; //TODO 'ptscNumGlobVerts'
   int numCells; //TODO 'ptscNumCells'
   Omega_h::HostRead<Omega_h::Real> vertexCoords; //TODO 'ptscVtxCoords'
+  Omega_h::LOs partvtx2corevtx_rd;
   if (strcmp(options->mesh_type, "picpart") == 0)
   {
     //PETSC_NEEDS_1 - 'vertexCoords'
     int numCoreVerts;
     int numOwnedCoreVerts;
-    Omega_h::LOs partvtx2corevtx_rd;
     getPicPartCoreVtxCoords(mesh, rank, numCoreVerts, numOwnedCoreVerts, vertexCoords, partvtx2corevtx_rd);
     int numCoreElms;
     Omega_h::HostRead<Omega_h::LO> cells2verts;
@@ -876,6 +956,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options, Ome
         localVertex, PETSC_OWN_POINTER, remoteVertex, PETSC_OWN_POINTER);CHKERRQ(ierr);
     ierr = DMSetFromOptions(*dm);CHKERRQ(ierr); //perform mesh checks
     ierr = DMViewFromOptions(*dm, NULL, "-dm_view");CHKERRQ(ierr);
+
     if(false) {
       PetscSFView(pointSF, PETSC_VIEWER_STDOUT_WORLD);
     }
@@ -967,6 +1048,10 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options, Ome
   ierr = DMPlexGetHeightStratum(*dm, 1, &eStart, &eEnd); /* edges */ 
   ierr = DMPlexGetHeightStratum(*dm, 2, &vStart, &vEnd); /* vertices */
 
+  Omega_h::filesystem::path file_path = options->serial_mesh_path;
+  std::unordered_set<int> boundary_verts = GetBoundaryVerts(file_path);
+  ierr = MarkBoundaryVerts(dm, boundary_verts, partvtx2corevtx_rd, mesh, vStart);
+
   if(debug) {
     for (int i = 0; i < commSize; i++) {
       if(rank == i) {
@@ -979,59 +1064,6 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options, Ome
     }
   }
 
-  /* 
-  Iterate through all the edges and then check if each edge is shared by two different cells by 
-  using DMPlexGetSupportSize. It is a boundary edge if the edge exist in only one cell. 
-  */
-  std::vector<int> boundary_edge;
-  for (int i = eStart; i < eEnd; i++)
-  {
-    int support_size;
-    ierr = DMPlexGetSupportSize(*dm, i, &support_size);CHKERRQ(ierr);
-
-    if (support_size == 1)
-    {
-      boundary_edge.push_back(i);
-    }
-    
-  }
-  
-  // By using a set, the vertices for all the boundary edges would not repeat
-  // Can be replaced with an unordered_set
-  std::set<int> boundary_vert;
-  for (unsigned int i = 0; i < boundary_edge.size(); i++)
-  {
-    // Get the two vertices for a boundary edge
-    const int *verts;
-    ierr = DMPlexGetCone(*dm, boundary_edge[i], &verts);CHKERRQ(ierr);
-
-    boundary_vert.insert(verts[0]);
-    boundary_vert.insert(verts[1]);
-  }
-
-  // Output an uninterpolated mesh if needed
-  if (options->interpolate == PETSC_FALSE)
-  {
-    DM dm_unint;
-    ierr = DMPlexUninterpolate(*dm, &dm_unint);CHKERRQ(ierr);
-    ierr = DMPlexCopyCoordinates(*dm, dm_unint);CHKERRQ(ierr);
-    ierr = DMDestroy(dm);CHKERRQ(ierr);
-    *dm = dm_unint;
-  }
-
-  // Mark the boundary vertices and edges in DMPlex
-  for (auto i = boundary_vert.begin(); i != boundary_vert.end(); i++)
-  {
-    ierr = DMSetLabelValue(*dm, "marker", *i, 1);CHKERRQ(ierr);
-  }
-  if (options->interpolate == PETSC_TRUE) 
-  {
-    for (unsigned int i = 0; i < boundary_edge.size(); i++)
-    {
-      ierr = DMSetLabelValue(*dm, "marker", boundary_edge[i], 1);CHKERRQ(ierr);
-    }
-  }
-  
   PetscFunctionReturn(0);
 }
 
