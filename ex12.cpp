@@ -71,6 +71,7 @@ typedef struct {
 
   char           mesh_type[512] = "box";
   char           picpart_path[512] = "picpart.osh";
+  char           serial_mesh_path[1024] = "serialMesh.osh";
 } AppCtx;
 
 static PetscErrorCode zero(PetscInt dim, PetscReal time, const PetscReal x[], PetscInt Nc, PetscScalar *u, void *ctx)
@@ -507,6 +508,7 @@ static PetscErrorCode ProcessOptions(MPI_Comm comm, AppCtx *options)
   }
   ierr = PetscOptionsString("-mesh", "Use box or xgc mesh", "ex12.c", options->mesh_type, options->mesh_type, sizeof(options->mesh_type), &flg);CHKERRQ(ierr);
   ierr = PetscOptionsString("-picpart_path", "Specify picpart file path", "ex12.c", options->picpart_path, options->picpart_path, sizeof(options->picpart_path), &flg);CHKERRQ(ierr);
+  ierr = PetscOptionsString("-serial_mesh_path", "Specify serial mesh file path", "ex12.c", options->serial_mesh_path, options->serial_mesh_path, sizeof(options->serial_mesh_path), &flg);CHKERRQ(ierr);
   ierr = PetscOptionsEnd();
   ierr = PetscLogEventRegister("CreateMesh", DM_CLASSID, &options->createMeshEvent);CHKERRQ(ierr);
   PetscFunctionReturn(0);
@@ -1047,7 +1049,7 @@ static PetscErrorCode CreateQuadMesh(MPI_Comm comm, DM *dm, AppCtx *options)
   ierr = DMPlexGetHeightStratum(*dm, 1, &eStart, &eEnd); /* edges */ 
   ierr = DMPlexGetHeightStratum(*dm, 2, &vStart, &vEnd); /* vertices */
 
-  Omega_h::filesystem::path file_path = "../omegahPetsc/24k.osh";
+  Omega_h::filesystem::path file_path = options->serial_mesh_path;
   std::unordered_set<int> boundary_verts = GetBoundaryVerts(file_path);
   ierr = MarkBoundaryVerts(dm, boundary_verts, partvtx2corevtx_rd, mesh, vStart);
 
